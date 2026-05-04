@@ -4,10 +4,9 @@ This file is the source of truth for AI agent behavior in this repo. When rules 
 
 ## Architecture
 
-Two-layer hook system that complements Claude Code's prompt-driven auto-memory:
+Single-hook system that complements Claude Code's prompt-driven auto-memory:
 
-- **Layer 1** — `SessionStart` hook injects a cross-cwd index of `~/.claude/projects/*/memory/MEMORY.md` files
-- **Layer 2** — `PreCompact` + `SessionEnd` hooks inject a four-question audit prompt to force memory checkpoints before context is lost
+- `SessionStart` hook injects a cross-cwd index of `~/.claude/projects/*/memory/MEMORY.md` files
 
 Full design, decision log, and alternatives considered are in [SPEC.md](SPEC.md).
 
@@ -38,8 +37,8 @@ Full design, decision log, and alternatives considered are in [SPEC.md](SPEC.md)
 
 Each hook script:
 - Reads stdin (the hook event JSON Claude Code passes); may use `cwd`, `session_id`, etc.
-- Writes to stdout. For `SessionStart`, `PreCompact`, `SessionEnd`, stdout is injected as additional context for the model
-- Exits 0 on any error (`trap 'exit 0' ERR`) so a hook failure never blocks Claude Code startup or compaction
+- Writes to stdout. For `SessionStart`, stdout is injected as additional context for the model
+- Exits 0 on any error (`trap 'exit 0' ERR`) so a hook failure never blocks Claude Code startup
 - Wraps emitted prompt content in `<system-reminder>...</system-reminder>` to signal system context
 
 ## Doc Set
