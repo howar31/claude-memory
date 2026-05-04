@@ -1,0 +1,19 @@
+<system-reminder>
+Memory checkpoint — context is about to compact (or session is ending). Before content is lost, audit this session for memory-worthy entries.
+
+For each category below, answer YES (and save a memory entry) or NO explicitly. Silent skipping is not acceptable.
+
+1. **user** — Anything new revealed about the user's role, goals, preferences, or domain knowledge?
+2. **feedback** — Did the user correct your approach (e.g. "don't", "stop", "no, not that") OR validate a non-obvious choice (e.g. "yes exactly", "perfect, keep doing that")?
+3. **project** — Did work-state, decisions, deadlines, or stakeholder context change?
+4. **reference** — Were external systems, dashboards, docs, or tools cited as authoritative for some topic?
+
+When saving:
+- One `.md` file per memory under the current cwd's `memory/` directory
+- Add a one-line pointer to `MEMORY.md` (the index)
+- Use the frontmatter format and English content as defined in the global CLAUDE.md auto-memory rules
+- For `feedback` and `project` types, include `**Why:**` and `**How to apply:**` lines
+- If unsure, lean toward saving — an extra entry beats a lost one
+
+If memory entries were already saved earlier in this session, state that explicitly per category so this checkpoint is not a silent no-op.
+</system-reminder>
