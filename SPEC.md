@@ -4,13 +4,21 @@
 
 Claude Code (the CLI) ships an auto-memory feature: if `autoMemoryEnabled: true` is set in `~/.claude/settings.json`, Claude is expected to write durable memory entries into `~/.claude/projects/<encoded-cwd>/memory/` over the course of conversations. The mechanism is prompt-driven — the model decides mid-conversation when content is "memorable enough" to save.
 
-This repo addresses one specific gap: **per-cwd silos**.
+This repo addresses two failure modes of that design:
+
+### 1.1 Per-cwd silos (read-time)
 
 Memory is namespaced by cwd. Each working directory becomes its own folder under `~/.claude/projects/` (with the cwd path encoded into the folder name — e.g. `/path/to/project` becomes `-path-to-project`). A memory entry written while working in one cwd lives only in that cwd's memory folder and is **not visible** to a Claude Code session started in a sibling or parent cwd, even when the same person and the same broader project family are involved.
 
 This becomes most painful when substantial work performed in a sub-project cwd is later referenced from the parent or a sibling cwd, because Claude only loads the current cwd's `MEMORY.md` at startup — even though the relevant entry exists, just one folder over.
 
-This is a **read-time** problem at the session boundary. Claude Code exposes a `SessionStart` hook that fires there; this repo uses it to inject a cross-cwd index.
+A `SessionStart` hook closes this gap by injecting a cross-cwd index at the start of every session.
+
+### 1.2 Write-rate variance (write-time)
+
+The auto-memory rules in the global `~/.claude/CLAUDE.md` instruct Claude to save memory entries when certain triggers occur (user corrections, validated approaches, project state changes, external references cited). Because the trigger is interpretive ("did anything memorable happen?"), the model sometimes does not notice. Some sessions yield no memory entries despite producing content that would have been worth saving.
+
+The `/memorize` skill closes this gap. It is a slash command (and model-invocable) that audits the current session against the four memory categories explicitly and persists matching entries.
 
 ## 2. Alternatives Considered
 
@@ -42,6 +50,8 @@ When Anthropic's Memory Tool eventually lands in Claude Code, hooks at the lifec
 
 ## 4. Architecture
 
+### 4.1 Read — Cross-cwd index (SessionStart hook)
+
 **Hook:** `SessionStart`
 **Script:** `hooks/memory-aggregate.sh`
 **Trigger:** every session start, every source (`startup`, `resume`, `clear`, `compact`)
@@ -66,7 +76,38 @@ The output also includes prescriptive guidance for Claude on when to consult the
 - **Decode via transcript, not filename** — the `~/.claude/projects/<encoded-cwd>` filename encoding is lossy (`/`, `_`, `.` all map to `-`), so reverse-decoding the cwd from the folder name is unreliable. The transcript's `cwd` field is authoritative.
 - **`<system-reminder>` wrapper** — signals to Claude that this is system-injected context, not user input, and aligns with the format Claude Code uses internally.
 
-### 4.1 Trade-offs not made
+### 4.2 Write — `/memorize` skill
+
+**Skill:** `skills/memorize/SKILL.md`
+**Type:** standalone slash command (not plugin)
+**Trigger:** user invocation OR model self-invocation
+
+The skill instruction file walks Claude through a six-step audit:
+
+1. **Locate the memory directory** — derive `~/.claude/projects/<encoded-cwd>/memory/` from the auto-loaded `MEMORY.md`, or fall back to scanning project transcripts for a matching cwd. Create the directory and an empty `MEMORY.md` if absent.
+2. **Audit four categories** — `user`, `feedback`, `project`, `reference`. Decide YES / NO explicitly per category. Read existing entries to avoid duplicates and prefer updates over duplicates.
+3. **Preview (only in `dry` mode)** — print proposed entries and wait for the user's response in the same skill execution; loop on edits, abort on decline.
+4. **Write entries** — one `.md` file per memory under the memory dir, with `name` / `description` / `type` frontmatter. `feedback` and `project` types must include `Why:` and `How to apply:` body lines.
+5. **Update `MEMORY.md` index** — append one pointer line per new entry, ≤ 150 chars.
+6. **Report** — list filenames written / updated; an empty audit is a valid result.
+
+**`$ARGUMENTS` parsing:**
+- Leading token `dry` (alone, or followed by whitespace + more text) enables preview mode; the rest is treated as the focus hint
+- Otherwise `$ARGUMENTS` is the focus hint (gives matching content priority but the audit still scans all four categories)
+
+**Why standalone instead of plugin:**
+
+Claude Code plugins force their skills to be namespaced as `/plugin-name:skill-name`. To keep the short slash name `/memorize`, the skill must be installed at the standalone path `~/.claude/skills/memorize/`. `setup.sh` symlinks it there from this repo so the source-of-truth stays in version control.
+
+**Why not a hook:**
+
+An earlier draft used `PreCompact` and `SessionEnd` hooks to inject a four-question audit before context loss. Both empirically failed: `PreCompact` stdout reaches the model but is suppressed by the concurrent compact-summary task, and `SessionEnd` stdout/stderr is shown to the user only and never reaches the model. A model-invocable skill executes in a normal turn with full tool access, sidestepping both failure modes.
+
+**Why model-invocation is enabled:**
+
+The skill's frontmatter omits `disable-model-invocation: true`, so Claude can self-trigger `/memorize` when it detects memory-worthy moments mid-conversation. This complements (but does not replace) explicit user invocation. The `description` field enumerates trigger conditions for the model's auto-decision logic.
+
+### 4.3 Trade-offs not made
 
 The following adjacent ideas were considered and deferred:
 
@@ -84,8 +125,11 @@ claude-memory/
 ├── CLAUDE.md                            agent index for working in this repo
 ├── SPEC.md                              this document
 ├── setup.sh                             idempotent installer + verifier
-└── hooks/
-    └── memory-aggregate.sh              SessionStart hook
+├── hooks/
+│   └── memory-aggregate.sh              SessionStart hook
+└── skills/
+    └── memorize/
+        └── SKILL.md                     /memorize slash command
 ```
 
 After install, the deployed surface is:
@@ -93,6 +137,9 @@ After install, the deployed surface is:
 ```
 ~/.claude/hooks/
   memory-aggregate.sh           -> /opt/projects/claude-memory/hooks/memory-aggregate.sh
+
+~/.claude/skills/
+  memorize                      -> /opt/projects/claude-memory/skills/memorize
 
 ~/.claude/system/memory         -> /opt/projects/claude-memory   (operational pointer)
 
@@ -104,7 +151,7 @@ The repo is the single source of truth. Hooks at `~/.claude/hooks/` are symlinks
 
 ## 6. Install Flow (`setup.sh`)
 
-The installer runs four phases plus a tool dependency check, in order:
+The installer runs five phases plus a tool dependency check, in order:
 
 ### 6.1 Tool dependency check
 
@@ -165,40 +212,71 @@ end
 
 Creates `~/.claude/system/memory` → repo path. Idempotent: skip if symlink already correct, halt on real-path occupation, relink with `--force` on wrong-target.
 
-### 6.5 Phase 4 — verify
+### 6.5 Phase 4 — install skill directories
 
-Runs *after* any patch attempt, regardless of whether the patch wrote anything:
+For each entry in `SKILL_DIRS` (currently `memorize`):
 
-- Each deployed path must be a symlink whose target matches the repo file
+| State at `~/.claude/skills/<dir>` | Action |
+|---|---|
+| Symlink already pointing at repo | Skip, mark ok |
+| Symlink pointing elsewhere | Halt unless `--force`; with `--force`, relink |
+| Real directory | Halt unless `--force`; with `--force`, move to `~/.claude/hooks/.bak/<timestamp>/skill-<dir>/`, then symlink |
+| Absent | Symlink |
+
+The skill source must contain a `SKILL.md` file; phase aborts if absent.
+
+### 6.6 Phase 5 — verify
+
+Runs *after* every install phase, regardless of whether they wrote anything:
+
+- Each deployed hook path must be a symlink whose target matches the repo file
+- Each deployed skill path must be a symlink whose target matches the repo skill directory; the linked `SKILL.md` must declare a matching `name:` frontmatter field
 - Smoke test: pipe a fake `cwd` JSON to `memory-aggregate.sh`; expect either empty output (fresh machine) or the `Cross-cwd memory index` header
 - Each `settings.json` event must contain the exact-match command
 
 If any check fails, the summary line is `Verification failed`. This is the answer to "if setup skipped, will the user know when something is wrong?" — the verify phase tests the deployed state directly, not the patch outcome.
 
-### 6.6 Flags
+### 6.7 Flags
 
 - `--dry-run` — print every action that would be taken; do nothing
-- `--force` — replace existing `~/.claude/hooks/memory-*` files even if content differs (settings.json conflicts still halt)
+- `--force` — replace existing `~/.claude/hooks/memory-*` files and existing `~/.claude/skills/<dir>` directories even if content differs (settings.json conflicts still halt)
 - `-h` / `--help` — print top-of-file documentation
 
-## 7. Hook Contract
+## 7. Hook & Skill Contracts
+
+### 7.1 Hook contract
 
 Every hook script in this repo follows the same contract:
 
-### Inputs
-
+**Inputs**
 - `stdin` — JSON object emitted by Claude Code, containing `session_id`, `cwd`, `transcript_path`, and event-specific fields. Read but tolerated as empty if missing
 - Environment variables — none required; `$HOME` used implicitly via the script's path resolution
 
-### Outputs
-
+**Outputs**
 - `stdout` — text content. For `SessionStart`, this becomes additional context injected into Claude's session
 - Exit code — always `0`. The trap `trap 'exit 0' ERR` ensures any internal error degrades to a no-op rather than blocking Claude Code's lifecycle event
 
-### Format conventions
-
+**Format conventions**
 - Output is wrapped in `<system-reminder>...</system-reminder>` to mark it as system-injected context
 - The wrapped content uses Markdown where useful but stays terse — Claude is the consumer, not a human reader
+
+### 7.2 Skill contract
+
+Every skill in this repo follows this layout:
+
+**Directory structure**
+- `skills/<name>/SKILL.md` — required; the only file Claude Code's standalone-skill loader needs
+
+**Frontmatter (YAML)**
+- `name` — must match the directory name; setup.sh verify enforces this
+- `description` — used for the slash-command listing AND model-invocation decision; must enumerate trigger conditions when model-invocation is enabled
+- `disable-model-invocation: true` — set only when the skill should be exclusively user-invocable
+
+**Body conventions**
+- English instructions (per the user's `Doc Language` rule)
+- Numbered steps the model executes in order
+- Use `$ARGUMENTS` for runtime input; document the parsing convention near the top
+- For destructive defaults (write/commit/delete), provide an explicit opt-in confirmation flag (e.g. `dry`)
 
 ## 8. settings.json Patch Discipline
 
@@ -227,11 +305,11 @@ This repo's hooks are a **parallel implementation at a different layer**:
 |---|---|---|---|
 | Where memory lives | `~/.claude/projects/<cwd>/memory/` | `/memories/` (client-defined) | Same as native |
 | Read trigger | Auto-load `MEMORY.md` at session start | Tool call when needed | SessionStart hook augments with cross-cwd index |
-| Write trigger | Model self-judgment in conversation | Tool call when needed | (not addressed) |
-| Granularity | Per-turn (model decision) | Per-tool-call | Per-session-start |
+| Write trigger | Model self-judgment in conversation | Tool call when needed | `/memorize` skill (user or model invokes explicitly) |
+| Granularity | Per-turn (model decision) | Per-tool-call | Per-session-start (read) + per-invocation (write) |
 | Status in Claude Code CLI | Active | Not yet integrated (as of this writing) | Active |
 
-When Claude Code integrates the Memory Tool natively, this repo's SessionStart augmentation still adds value — the Memory Tool does not natively know about other cwds. The portable `~/.claude/hooks/memory-*.sh` paths in `settings.json` (rather than repo-absolute paths) ensure that adapting to such changes is a one-line edit.
+When Claude Code integrates the Memory Tool natively, this repo's SessionStart augmentation still adds value — the Memory Tool does not natively know about other cwds. The `/memorize` skill could likewise coexist or be retired depending on whether Memory Tool's per-tool-call writes prove sufficient. The portable `~/.claude/hooks/memory-*.sh` and standalone-skill paths ensure that adapting to such changes is a localised edit.
 
 ## 10. Future Extensions (Not Implemented)
 

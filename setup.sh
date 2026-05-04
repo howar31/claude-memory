@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# claude-memory setup — idempotent installer for memory hooks.
+# claude-memory setup — idempotent installer for memory hooks and skills.
 #
-# Symlinks repo hook files into ~/.claude/hooks/, patches ~/.claude/settings.json
-# to wire the SessionStart hook, and creates ~/.claude/system/memory.
+# Symlinks repo hook files into ~/.claude/hooks/, repo skill directories into
+# ~/.claude/skills/, patches ~/.claude/settings.json to wire the SessionStart
+# hook, and creates ~/.claude/system/memory.
 #
 # Safe to re-run. Backs up before any destructive action. Verifies after install.
 #
 # Flags:
 #   --dry-run   Show what would happen, don't apply
-#   --force     Replace existing real files at ~/.claude/hooks/memory-*
+#   --force     Replace existing real files at ~/.claude/hooks/memory-* and
+#               existing real directories at ~/.claude/skills/<skill>/
 #               (settings.json conflicts always stop — fix manually)
 #   -h, --help  Show this help
 
@@ -16,7 +18,9 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK_FILES=("memory-aggregate.sh")
+SKILL_DIRS=("memorize")
 CLAUDE_HOOKS_DIR="$HOME/.claude/hooks"
+CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 SETTINGS="$HOME/.claude/settings.json"
 SYSTEM_LINK="$HOME/.claude/system/memory"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -32,7 +36,7 @@ for arg in "$@"; do
     --dry-run) DRY_RUN=1 ;;
     --force)   FORCE=1 ;;
     -h|--help)
-      sed -n '2,16p' "$0" | sed 's/^# \?//'
+      sed -n '2,17p' "$0" | sed 's/^# \?//'
       exit 0
       ;;
     *) echo "Unknown flag: $arg" >&2; exit 2 ;;
@@ -199,8 +203,46 @@ else
   ok "$SYSTEM_LINK linked → $SCRIPT_DIR"
 fi
 
-# --- Phase 4: verify ---
-header "Phase 4 — verify"
+# --- Phase 4: install skill directories (symlinks) ---
+header "Phase 4 — install skill directories"
+mkdir -p "$CLAUDE_SKILLS_DIR"
+
+for d in "${SKILL_DIRS[@]}"; do
+  src="$SCRIPT_DIR/skills/$d"
+  dst="$CLAUDE_SKILLS_DIR/$d"
+
+  [ -d "$src" ] || { err "Source missing: $src"; exit 1; }
+  [ -f "$src/SKILL.md" ] || { err "Source missing SKILL.md: $src/SKILL.md"; exit 1; }
+
+  if [ -L "$dst" ]; then
+    actual="$(readlink "$dst")"
+    if [ "$actual" = "$src" ]; then
+      ok "$d skill symlink already correct"
+    elif [ "$FORCE" -eq 1 ]; then
+      run "rm '$dst' && ln -s '$src' '$dst'"
+      ok "$d skill relinked (was: $actual)"
+    else
+      err "$d skill symlink points elsewhere: $actual"
+      err "  use --force to relink"
+      exit 1
+    fi
+  elif [ -e "$dst" ]; then
+    if [ "$FORCE" -eq 1 ]; then
+      run "mkdir -p '$backup_dir' && mv '$dst' '$backup_dir/skill-$d' && ln -s '$src' '$dst'"
+      ok "$d skill real dir replaced (backup: $backup_dir/skill-$d)"
+    else
+      err "$d skill real directory exists at $dst"
+      err "  use --force to backup-and-replace"
+      exit 1
+    fi
+  else
+    run "ln -s '$src' '$dst'"
+    ok "$d skill symlinked (fresh)"
+  fi
+done
+
+# --- Phase 5: verify ---
+header "Phase 5 — verify"
 fail=0
 
 verify_link() {
@@ -212,6 +254,26 @@ verify_link() {
     err "$label: symlink → $target (expected repo)"; fail=1; return
   fi
   ok "$label symlink → repo"
+}
+
+verify_skill() {
+  local d="$1"
+  local path="$CLAUDE_SKILLS_DIR/$d"
+  if [ ! -L "$path" ]; then err "skill $d: $path not a symlink"; fail=1; return; fi
+  local target; target="$(readlink "$path")"
+  if [ "$target" != "$SCRIPT_DIR/skills/$d" ]; then
+    err "skill $d: symlink → $target (expected repo)"; fail=1; return
+  fi
+  ok "skill $d symlink → repo"
+
+  local skill_md="$path/SKILL.md"
+  if [ ! -f "$skill_md" ]; then
+    err "skill $d: SKILL.md missing at $skill_md"; fail=1; return
+  fi
+  if ! grep -q "^name: *$d *$" "$skill_md"; then
+    err "skill $d: SKILL.md frontmatter must include 'name: $d'"; fail=1; return
+  fi
+  ok "skill $d SKILL.md frontmatter ok"
 }
 
 verify_link "memory-aggregate.sh" "memory-aggregate.sh"
@@ -227,6 +289,10 @@ if smoke=$(echo '{"cwd":"/__verify__","session_id":"v"}' | bash "$CLAUDE_HOOKS_D
 else
   err "smoke test: script failed"; fail=1
 fi
+
+for d in "${SKILL_DIRS[@]}"; do
+  verify_skill "$d"
+done
 
 for entry in "${SETTINGS_HOOKS[@]}"; do
   IFS='|' read -r event _ cmd <<< "$entry"
@@ -245,6 +311,7 @@ header "Summary"
 if [ "$fail" -eq 0 ]; then
   printf '  %sAll checks passed.%s Memory system fully operational.\n\n' "$C_OK" "$C_RST"
   printf '  Restart Claude Code to load the SessionStart hook.\n'
+  printf '  Skills are picked up dynamically; run /reload-plugins in an active session if needed.\n'
   exit 0
 else
   printf '  %sVerification failed.%s See errors above.\n' "$C_ERR" "$C_RST"

@@ -4,17 +4,18 @@ This file is the source of truth for AI agent behavior in this repo. When rules 
 
 ## Architecture
 
-Single-hook system that complements Claude Code's prompt-driven auto-memory:
+Two complementary artifacts that augment Claude Code's prompt-driven auto-memory:
 
-- `SessionStart` hook injects a cross-cwd index of `~/.claude/projects/*/memory/MEMORY.md` files
+- **Read** — `SessionStart` hook (`hooks/memory-aggregate.sh`) injects a cross-cwd index of `~/.claude/projects/*/memory/MEMORY.md` files
+- **Write** — `/memorize` skill (`skills/memorize/SKILL.md`) audits the current session against the four memory categories and persists entries; standalone (not plugin) so the slash name stays short; model-invocable
 
 Full design, decision log, and alternatives considered are in [SPEC.md](SPEC.md).
 
 ## Run / Setup
 
-- Install: `./setup.sh` — idempotent; symlinks hook files, patches `~/.claude/settings.json`, links `~/.claude/system/memory` → repo, then verifies
+- Install: `./setup.sh` — idempotent; symlinks hook files into `~/.claude/hooks/`, skill dirs into `~/.claude/skills/`, patches `~/.claude/settings.json`, links `~/.claude/system/memory` → repo, then verifies
 - Preview: `./setup.sh --dry-run`
-- Force replace mismatched hook files at `~/.claude/hooks/`: `./setup.sh --force` (does not apply to `settings.json` conflicts — those always halt)
+- Force replace mismatched files/dirs at `~/.claude/hooks/` and `~/.claude/skills/`: `./setup.sh --force` (does not apply to `settings.json` conflicts — those always halt)
 - Verify any time: re-run `./setup.sh`
 
 ## Code Style
@@ -33,13 +34,19 @@ Full design, decision log, and alternatives considered are in [SPEC.md](SPEC.md)
 - Detect existing entries: exact-command match → skip; different command in `memory-*` namespace → halt with diff and remediation hint
 - `--force` does **not** override `settings.json` conflicts; user must edit manually
 
-## Hook Contract
+## Hook & Skill Contracts
 
-Each hook script:
+**Hook (`hooks/memory-aggregate.sh`):**
 - Reads stdin (the hook event JSON Claude Code passes); may use `cwd`, `session_id`, etc.
 - Writes to stdout. For `SessionStart`, stdout is injected as additional context for the model
 - Exits 0 on any error (`trap 'exit 0' ERR`) so a hook failure never blocks Claude Code startup
 - Wraps emitted prompt content in `<system-reminder>...</system-reminder>` to signal system context
+
+**Skill (`skills/memorize/SKILL.md`):**
+- Frontmatter requires `name` (must match dir name) and `description` (drives both listing and model-invocation decision)
+- Body is numbered steps, English, terse
+- `$ARGUMENTS` parsing documented near the top
+- Destructive default actions must offer an opt-in confirmation flag (e.g. `dry`)
 
 ## Doc Set
 
@@ -71,9 +78,10 @@ All docs in English. Code comments in English. The user's conversation language 
 
 - The path `~/.claude/system/memory/` may be a symlink pointing here; do not introduce hardcoded `/opt/projects/claude-memory` references in scripts — use `SCRIPT_DIR`-relative paths so the repo is portable to other clone locations
 - The hook command strings in `settings.json` use `~/.claude/hooks/memory-*.sh` (which resolve through the symlinks); do not bake repo-absolute paths into `settings.json`
+- Skill directories at `~/.claude/skills/<name>/` must be symlinks resolving to the repo; never copy real files there (drift kills the SSOT property)
 
 ## Relationship to Anthropic Memory Tool
 
 Anthropic released a Memory Tool (`memory_20250818`) on 2025-09-29 alongside Claude Sonnet 4.5. It operates at the API/SDK layer (per-tool-call memory operations). Claude Code's CLI auto-memory is a separate, older, prompt-based mechanism using `~/.claude/projects/<cwd>/memory/`.
 
-This repo enhances the **prompt-based mechanism** via lifecycle hooks. When/if Claude Code integrates the official Memory Tool, the two should coexist: hooks fire at lifecycle boundaries, the Memory Tool fires per tool call. They are orthogonal. See SPEC.md "Future" for migration notes.
+This repo enhances the **prompt-based mechanism** via a `SessionStart` hook (read) and a `/memorize` slash command skill (write). When/if Claude Code integrates the official Memory Tool, the layers should coexist: this repo operates at lifecycle/skill granularity, the Memory Tool fires per tool call. See SPEC.md "Future" for migration notes.
