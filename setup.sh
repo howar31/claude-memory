@@ -2,7 +2,7 @@
 # claude-memory setup — idempotent installer for memory hooks.
 #
 # Symlinks repo hook files into ~/.claude/hooks/, patches ~/.claude/settings.json
-# to wire SessionStart / PreCompact / SessionEnd, and creates ~/.claude/system/memory.
+# to wire the SessionStart hook, and creates ~/.claude/system/memory.
 #
 # Safe to re-run. Backs up before any destructive action. Verifies after install.
 #
@@ -15,7 +15,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOOK_FILES=("memory-aggregate.sh" "memory-checkpoint.sh" "memory-checkpoint-prompt.txt")
+HOOK_FILES=("memory-aggregate.sh")
 CLAUDE_HOOKS_DIR="$HOME/.claude/hooks"
 SETTINGS="$HOME/.claude/settings.json"
 SYSTEM_LINK="$HOME/.claude/system/memory"
@@ -23,8 +23,6 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 SETTINGS_HOOKS=(
   "SessionStart|.*|bash ~/.claude/hooks/memory-aggregate.sh"
-  "PreCompact|.*|bash ~/.claude/hooks/memory-checkpoint.sh"
-  "SessionEnd|.*|bash ~/.claude/hooks/memory-checkpoint.sh"
 )
 
 DRY_RUN=0
@@ -216,30 +214,18 @@ verify_link() {
   ok "$label symlink → repo"
 }
 
-verify_link "memory-aggregate.sh"          "Layer 1 file"
-verify_link "memory-checkpoint.sh"         "Layer 2 file"
-verify_link "memory-checkpoint-prompt.txt" "Layer 2 prompt"
+verify_link "memory-aggregate.sh" "memory-aggregate.sh"
 
 if smoke=$(echo '{"cwd":"/__verify__","session_id":"v"}' | bash "$CLAUDE_HOOKS_DIR/memory-aggregate.sh" 2>&1); then
   if [ -z "$smoke" ]; then
-    note "Layer 1 smoke: empty output (no other-cwd memories yet — expected on fresh machine)"
+    note "smoke test: empty output (no other-cwd memories yet — expected on fresh machine)"
   elif echo "$smoke" | grep -q "Cross-cwd memory index"; then
-    ok "Layer 1 smoke: header emitted"
+    ok "smoke test: header emitted"
   else
-    err "Layer 1 smoke: unexpected output"; fail=1
+    err "smoke test: unexpected output"; fail=1
   fi
 else
-  err "Layer 1 smoke: script failed"; fail=1
-fi
-
-if smoke=$(echo '{}' | bash "$CLAUDE_HOOKS_DIR/memory-checkpoint.sh" 2>&1); then
-  if echo "$smoke" | grep -q "Memory checkpoint"; then
-    ok "Layer 2 smoke: prompt emitted"
-  else
-    err "Layer 2 smoke: prompt sentinel missing"; fail=1
-  fi
-else
-  err "Layer 2 smoke: script failed"; fail=1
+  err "smoke test: script failed"; fail=1
 fi
 
 for entry in "${SETTINGS_HOOKS[@]}"; do

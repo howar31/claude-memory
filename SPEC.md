@@ -2,24 +2,15 @@
 
 ## 1. Problem Statement
 
-Claude Code (the CLI) ships an auto-memory feature: if `autoMemoryEnabled: true` is set in `~/.claude/settings.json`, Claude is expected to write durable memory entries into `~/.claude/projects/<encoded-cwd>/memory/` over the course of conversations. The mechanism is prompt-driven — the model decides mid-conversation when content is "memorable enough" to save. Two failure modes follow from that design:
+Claude Code (the CLI) ships an auto-memory feature: if `autoMemoryEnabled: true` is set in `~/.claude/settings.json`, Claude is expected to write durable memory entries into `~/.claude/projects/<encoded-cwd>/memory/` over the course of conversations. The mechanism is prompt-driven — the model decides mid-conversation when content is "memorable enough" to save.
 
-### 1.1 Per-cwd silos
+This repo addresses one specific gap: **per-cwd silos**.
 
 Memory is namespaced by cwd. Each working directory becomes its own folder under `~/.claude/projects/` (with the cwd path encoded into the folder name — e.g. `/path/to/project` becomes `-path-to-project`). A memory entry written while working in one cwd lives only in that cwd's memory folder and is **not visible** to a Claude Code session started in a sibling or parent cwd, even when the same person and the same broader project family are involved.
 
 This becomes most painful when substantial work performed in a sub-project cwd is later referenced from the parent or a sibling cwd, because Claude only loads the current cwd's `MEMORY.md` at startup — even though the relevant entry exists, just one folder over.
 
-### 1.2 Write-rate variance
-
-The auto-memory rules in the global `~/.claude/CLAUDE.md` instruct Claude to save memory entries when certain triggers occur (user corrections, validated approaches, project state changes, external references cited). But because the trigger is interpretive ("did anything memorable happen?"), the model sometimes does not notice. Some sessions yield no memory entries despite producing content that would have been worth saving.
-
-Both failures are **at session boundaries**:
-
-- The cross-cwd silo is a **read-time** problem — at session start, only the current cwd's memory is loaded.
-- The write-rate variance is a **write-time** problem — by the end of a session, content that should have been saved has not been.
-
-Claude Code exposes a hook system (`SessionStart`, `PreCompact`, `Stop`, `SessionEnd`, etc.) that fires at exactly those boundaries. This repo uses those hooks to close both gaps.
+This is a **read-time** problem at the session boundary. Claude Code exposes a `SessionStart` hook that fires there; this repo uses it to inject a cross-cwd index.
 
 ## 2. Alternatives Considered
 
@@ -28,10 +19,10 @@ Before settling on hooks, the author surveyed several memory-system architecture
 | System | Core idea | Why not adopted |
 |---|---|---|
 | [mem-palace](https://github.com/mempalace/mempalace) | Local-first verbatim transcript storage with hybrid semantic/lexical search; `wings/rooms/drawers` structure | Adds a vector DB stack; English-only default embedder needs replacement for the user's CJK conversations; overkill at the current memory volume (~64 entries) |
-| [Obsidian + Basic Memory](https://docs.basicmemory.com/integrations/obsidian) | Markdown vault with `[[wiki-links]]`; Claude reads/writes via MCP | User's `Applied Learning` rule prefers CLI over MCP; introduces a vault-management workflow the user does not need yet; Obsidian's value (graph view, manual curation) does not address the write-rate variance |
-| [Karpathy LLM Wiki / claude-obsidian](https://github.com/AgriciDaniel/claude-obsidian) | `/wiki`, `/save`, `/autoresearch` slash commands compile sessions into a maintained wiki of 10–15 pages | Requires conscious workflow discipline; useful long-term but does not solve the immediate write-rate problem |
-| [OpenClaw](https://github.com/openclaw/openclaw) | Multi-layer plugin pipeline; daily logs → recall signals → background "dreaming sweep" → promoted into `MEMORY.md`; pluggable QMD / LanceDB / Honcho backends; CJK FTS5 trigram | OpenClaw is a separate AI-assistant gateway, not a Claude Code add-on; concepts directly informed Layer 2 (boundary-event audit) and the longer-term promotion roadmap |
-| [muse-crystal-seed](https://github.com/frank890417/muse-crystal-seed) | Seven-file agent decomposition (SOUL/IDENTITY/USER/MEMORY/AGENTS/HEARTBEAT/TOOLS); `after-action` skill enforces a six-step closing checklist; `Lesson Graduation` system for chronic feedback | Inspiration for Layer 2's mandatory four-question audit prompt; the `Lesson Graduation` mechanism is held back as a future "Layer 3" once the existing `Applied Learning` log accumulates enough entries to justify it |
+| [Obsidian + Basic Memory](https://docs.basicmemory.com/integrations/obsidian) | Markdown vault with `[[wiki-links]]`; Claude reads/writes via MCP | User's `Applied Learning` rule prefers CLI over MCP; introduces a vault-management workflow the user does not need yet; Obsidian's value (graph view, manual curation) is orthogonal to the cross-cwd silo problem |
+| [Karpathy LLM Wiki / claude-obsidian](https://github.com/AgriciDaniel/claude-obsidian) | `/wiki`, `/save`, `/autoresearch` slash commands compile sessions into a maintained wiki of 10–15 pages | Requires conscious workflow discipline; useful long-term but does not address per-cwd memory invisibility |
+| [OpenClaw](https://github.com/openclaw/openclaw) | Multi-layer plugin pipeline; daily logs → recall signals → background "dreaming sweep" → promoted into `MEMORY.md`; pluggable QMD / LanceDB / Honcho backends; CJK FTS5 trigram | OpenClaw is a separate AI-assistant gateway, not a Claude Code add-on; concepts inform a possible future promotion roadmap |
+| [muse-crystal-seed](https://github.com/frank890417/muse-crystal-seed) | Seven-file agent decomposition (SOUL/IDENTITY/USER/MEMORY/AGENTS/HEARTBEAT/TOOLS); `after-action` skill enforces a six-step closing checklist; `Lesson Graduation` system for chronic feedback | The `Lesson Graduation` mechanism is held back as a future extension once the existing `Applied Learning` log accumulates enough entries to justify it |
 | [Letta / MemGPT](https://github.com/letta-ai/letta) | OS virtual-memory metaphor (Core / Recall / Archival); agent runs inside Letta runtime | Wrong scope — would require migrating off Claude Code, not augmenting it |
 | [Mem0](https://github.com/mem0ai/mem0) | Three-tier scope (user/session/agent), hybrid vector + graph + KV; drop-in API | API service; would introduce a vector DB and a service dependency for a problem that filesystem hooks solve |
 | [Zep / Graphiti](https://github.com/getzep/zep) | Temporal knowledge graph with fact-validity windows; ~63.8% on LongMemEval (vs Mem0 49.0%) | Architecturally interesting for "what was true on date X" queries, but daily-log dates already suffice for the user's current need |
@@ -41,23 +32,15 @@ Before settling on hooks, the author surveyed several memory-system architecture
 
 Two design pressures favored hooks over every other option in § 2:
 
-### 3.1 Reliability vs flexibility
-
-The native auto-memory mechanism asks the model to decide *during* a turn whether content is worth saving. This is flexible (the model can save anything, anytime) but unreliable (the model can also save nothing, even when content was clearly worth saving). Hooks give up the fine-grained "during a turn" trigger but gain a guaranteed trigger at lifecycle boundaries — and most write-rate failures happen because the model finished the conversation without noticing, not because it noticed and got the trigger wrong.
-
-So the right complement to a flexible-but-unreliable mechanism is a coarse-but-reliable one. Hooks fit that role exactly.
-
-### 3.2 Scope alignment
+### 3.1 Scope alignment
 
 Claude Code already keeps memory as plain markdown files at known paths. Any other system in § 2 introduces either a database, a service, an MCP server, or an external app. Hooks are the lowest-overhead extension point that operates on the existing filesystem with zero new dependencies and stays compatible with the user's `Applied Learning` rule of "prefer CLI over MCP."
 
-### 3.3 Forward compatibility
+### 3.2 Forward compatibility
 
 When Anthropic's Memory Tool eventually lands in Claude Code, hooks at the lifecycle layer remain orthogonal to a tool firing per tool call. The two can coexist; § 9 discusses migration paths.
 
 ## 4. Architecture
-
-### 4.1 Layer 1 — Cross-cwd index
 
 **Hook:** `SessionStart`
 **Script:** `hooks/memory-aggregate.sh`
@@ -83,29 +66,12 @@ The output also includes prescriptive guidance for Claude on when to consult the
 - **Decode via transcript, not filename** — the `~/.claude/projects/<encoded-cwd>` filename encoding is lossy (`/`, `_`, `.` all map to `-`), so reverse-decoding the cwd from the folder name is unreliable. The transcript's `cwd` field is authoritative.
 - **`<system-reminder>` wrapper** — signals to Claude that this is system-injected context, not user input, and aligns with the format Claude Code uses internally.
 
-### 4.2 Layer 2 — Audit checkpoint
-
-**Hooks:** `PreCompact` and `SessionEnd`
-**Script:** `hooks/memory-checkpoint.sh`
-**Prompt:** `hooks/memory-checkpoint-prompt.txt`
-**Trigger:** before context compaction, and at session end
-
-On fire, the script consumes stdin (hook event JSON, currently unused) and prints the prompt file. The prompt is a `<system-reminder>` block instructing Claude to audit the session against four memory categories (`user`, `feedback`, `project`, `reference`) and answer YES/NO explicitly per category — silently skipping is forbidden by the prompt.
-
-**Why this design:**
-
-- **Two events, one script** — `PreCompact` covers the long-session case (compaction implies enough activity to be worth auditing). `SessionEnd` is a second-line safety net for the case where a session ends without ever compacting. Both invoke the same script.
-- **Prompt as data** — the audit prompt is in a separate `.txt` file. This makes the prompt easy to revise without touching shell logic, and the script becomes a thin wrapper that exits cleanly on any error.
-- **No deduplication** — if both `PreCompact` and `SessionEnd` fire in the same session (compaction during a long session that then ends), the audit runs twice. The redundant pass is preferable to a missed pass; if Claude already saved entries earlier, the prompt instructs the model to acknowledge that explicitly so the second pass becomes a no-op.
-- **No length conditioning** — short sessions still get the prompt. The cost is one round of reasoning, and short sessions tend to honestly answer "no" across all four categories anyway, which is a meaningful confirmation in itself.
-
-### 4.3 Trade-offs not made
+### 4.1 Trade-offs not made
 
 The following adjacent ideas were considered and deferred:
 
-- **Stop hook for per-turn audit** — fires every reply; would saturate token cost and noise. Discarded.
-- **UserPromptSubmit hook for active prefetch** (à la OpenClaw `active-memory`) — a more ambitious version of Layer 1 that injects relevant memory before each turn, not just at session start. Held as a possible future Layer 4 once Layer 1's effect is observed in practice.
-- **Lesson Graduation** — porting muse-crystal-seed's `active`/`graduated`/`chronic` state machine to the global `Applied Learning` log. Held as a possible future Layer 3 when that log accumulates ≥ 5 entries (currently 1).
+- **UserPromptSubmit hook for active prefetch** (à la OpenClaw `active-memory`) — a more ambitious version of cross-cwd injection that pulls in relevant memory before each user turn, not just at session start. Held until the SessionStart index proves insufficient in practice.
+- **Lesson Graduation** — porting muse-crystal-seed's `active`/`graduated`/`chronic` state machine to the global `Applied Learning` log. Held until that log accumulates ≥ 5 entries (currently 1).
 
 ## 5. File Layout
 
@@ -119,9 +85,7 @@ claude-memory/
 ├── SPEC.md                              this document
 ├── setup.sh                             idempotent installer + verifier
 └── hooks/
-    ├── memory-aggregate.sh              Layer 1 (SessionStart)
-    ├── memory-checkpoint.sh             Layer 2 (PreCompact + SessionEnd)
-    └── memory-checkpoint-prompt.txt     Layer 2 prompt content
+    └── memory-aggregate.sh              SessionStart hook
 ```
 
 After install, the deployed surface is:
@@ -129,15 +93,11 @@ After install, the deployed surface is:
 ```
 ~/.claude/hooks/
   memory-aggregate.sh           -> /opt/projects/claude-memory/hooks/memory-aggregate.sh
-  memory-checkpoint.sh          -> /opt/projects/claude-memory/hooks/memory-checkpoint.sh
-  memory-checkpoint-prompt.txt  -> /opt/projects/claude-memory/hooks/memory-checkpoint-prompt.txt
 
 ~/.claude/system/memory         -> /opt/projects/claude-memory   (operational pointer)
 
 ~/.claude/settings.json
   hooks.SessionStart   includes  bash ~/.claude/hooks/memory-aggregate.sh
-  hooks.PreCompact     includes  bash ~/.claude/hooks/memory-checkpoint.sh
-  hooks.SessionEnd     includes  bash ~/.claude/hooks/memory-checkpoint.sh
 ```
 
 The repo is the single source of truth. Hooks at `~/.claude/hooks/` are symlinks back into the repo, so editing through either path stages the same file. The repo's location is portable (`SCRIPT_DIR=$(cd $(dirname $0) && pwd)` resolves at runtime).
@@ -152,7 +112,7 @@ Verifies `jq` and `bash` are on `PATH`. Aborts with remediation hint if either i
 
 ### 6.2 Phase 1 — install hook files
 
-For each of the three artifacts (`memory-aggregate.sh`, `memory-checkpoint.sh`, `memory-checkpoint-prompt.txt`):
+For each artifact (currently just `memory-aggregate.sh`):
 
 | State at `~/.claude/hooks/<file>` | Action |
 |---|---|
@@ -164,12 +124,10 @@ For each of the three artifacts (`memory-aggregate.sh`, `memory-checkpoint.sh`, 
 
 ### 6.3 Phase 2 — wire `settings.json`
 
-For each of the three required hook entries:
+For each required hook entry (currently just one):
 
 ```
 SessionStart  matcher='.*'  command='bash ~/.claude/hooks/memory-aggregate.sh'
-PreCompact    matcher='.*'  command='bash ~/.claude/hooks/memory-checkpoint.sh'
-SessionEnd    matcher='.*'  command='bash ~/.claude/hooks/memory-checkpoint.sh'
 ```
 
 | State in `settings.json` for this event | Action |
@@ -211,9 +169,8 @@ Creates `~/.claude/system/memory` → repo path. Idempotent: skip if symlink alr
 
 Runs *after* any patch attempt, regardless of whether the patch wrote anything:
 
-- Each of the three deployed paths must be a symlink whose target matches the repo file
-- Layer 1 smoke: pipe a fake `cwd` JSON to `memory-aggregate.sh`; expect either empty output (fresh machine) or the `Cross-cwd memory index` header
-- Layer 2 smoke: pipe `{}` to `memory-checkpoint.sh`; expect the `Memory checkpoint` sentinel string
+- Each deployed path must be a symlink whose target matches the repo file
+- Smoke test: pipe a fake `cwd` JSON to `memory-aggregate.sh`; expect either empty output (fresh machine) or the `Cross-cwd memory index` header
 - Each `settings.json` event must contain the exact-match command
 
 If any check fails, the summary line is `Verification failed`. This is the answer to "if setup skipped, will the user know when something is wrong?" — the verify phase tests the deployed state directly, not the patch outcome.
@@ -235,7 +192,7 @@ Every hook script in this repo follows the same contract:
 
 ### Outputs
 
-- `stdout` — text content. For `SessionStart`, `PreCompact`, and `SessionEnd`, this becomes additional context injected into Claude's session
+- `stdout` — text content. For `SessionStart`, this becomes additional context injected into Claude's session
 - Exit code — always `0`. The trap `trap 'exit 0' ERR` ensures any internal error degrades to a no-op rather than blocking Claude Code's lifecycle event
 
 ### Format conventions
@@ -269,21 +226,16 @@ This repo's hooks are a **parallel implementation at a different layer**:
 | Layer | Native Claude Code | Anthropic Memory Tool | This repo |
 |---|---|---|---|
 | Where memory lives | `~/.claude/projects/<cwd>/memory/` | `/memories/` (client-defined) | Same as native |
-| Read trigger | Auto-load `MEMORY.md` at session start | Tool call when needed | Layer 1 hook augments with cross-cwd index |
-| Write trigger | Model self-judgment in conversation | Tool call when needed | Layer 2 hook prompts at boundaries |
-| Granularity | Per-turn (model decision) | Per-tool-call | Per-lifecycle-event |
+| Read trigger | Auto-load `MEMORY.md` at session start | Tool call when needed | SessionStart hook augments with cross-cwd index |
+| Write trigger | Model self-judgment in conversation | Tool call when needed | (not addressed) |
+| Granularity | Per-turn (model decision) | Per-tool-call | Per-session-start |
 | Status in Claude Code CLI | Active | Not yet integrated (as of this writing) | Active |
 
-When Claude Code integrates the Memory Tool natively, the layers should coexist:
-
-- **Layer 1** still adds value — the Memory Tool does not natively know about other cwds
-- **Layer 2** may become redundant if the Memory Tool's write triggers prove reliable; in that case, Layer 2 can be removed without affecting the rest of the system
-
-The portable `~/.claude/hooks/memory-*.sh` paths in `settings.json` (rather than repo-absolute paths) ensure that adapting to such changes is a one-line edit.
+When Claude Code integrates the Memory Tool natively, this repo's SessionStart augmentation still adds value — the Memory Tool does not natively know about other cwds. The portable `~/.claude/hooks/memory-*.sh` paths in `settings.json` (rather than repo-absolute paths) ensure that adapting to such changes is a one-line edit.
 
 ## 10. Future Extensions (Not Implemented)
 
-### 10.1 Layer 3 — Lesson Graduation
+### 10.1 Lesson Graduation
 
 Port muse-crystal-seed's lesson state machine into the user's global `Applied Learning` log:
 
@@ -293,11 +245,11 @@ Port muse-crystal-seed's lesson state machine into the user's global `Applied Le
 
 Defer until `Applied Learning` accumulates ≥ 5 entries (currently 1). Premature implementation would impose state machine overhead on a single rule.
 
-### 10.2 Layer 4 — Active prefetch
+### 10.2 Active prefetch
 
 A `UserPromptSubmit` hook that searches all `~/.claude/projects/*/memory/` for keyword matches with each user message, injecting relevant entries proactively (à la OpenClaw `active-memory`).
 
-Defer until Layer 1's effect is observed for ≥ 2 weeks. If users still ask "did we work on X before?" after Layer 1 ships the index proactively, Layer 4 closes the gap. If Layer 1 is sufficient, Layer 4 is wasted token spend.
+Defer until the SessionStart cross-cwd index is observed for ≥ 2 weeks. If users still ask "did we work on X before?" after the index ships proactively, active prefetch closes the gap. If the index is sufficient, active prefetch is wasted token spend.
 
 ### 10.3 Promotion sweep
 
