@@ -1,0 +1,6 @@
+# Setup backups (created by setup.sh before any destructive action)
+*.bak
+*.bak.*
+
+# OS
+.DS_Store
