@@ -5,6 +5,9 @@
 [![Made with Bash](https://img.shields.io/badge/made%20with-bash-4EAA25?style=flat-square&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-yellow?style=flat-square)](https://www.conventionalcommits.org)
 [![Last Commit](https://img.shields.io/github/last-commit/howar31/claude-memory?style=flat-square)](https://github.com/howar31/claude-memory/commits/main)
+[![Stars](https://img.shields.io/github/stars/howar31/claude-memory?style=flat-square)](https://github.com/howar31/claude-memory/stargazers)
+[![Open Issues](https://img.shields.io/github/issues/howar31/claude-memory?style=flat-square)](https://github.com/howar31/claude-memory/issues)
+[![Sponsor on Ko-fi](https://img.shields.io/badge/sponsor-Ko--fi-FF5E5B?style=flat-square&logo=ko-fi&logoColor=white)](https://ko-fi.com/howar31)
 
 Two complementary enhancements that close reliability gaps in [Claude Code](https://claude.com/claude-code)'s built-in auto-memory: a **read** layer that surfaces memory across project directories, and a **write** layer that audits the conversation on demand. Pure read/write on top of the existing `~/.claude/projects/<encoded-cwd>/memory/` filesystem. No vector database, no MCP server, no external service.
 
