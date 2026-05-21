@@ -24,7 +24,7 @@ Claude Code's auto-memory is namespaced per cwd. A memory written while working 
 /recall             → infer the topic from the conversation (or ask if unclear)
 ```
 
-Because recall happens **at query time** (grep returns only the matching slice) rather than by injecting a full index at startup, it scales without limit as your memory grows. The skill is model-invocable, so Claude self-triggers it when you reference past work in another project or ask what it remembers about a topic.
+Because recall happens **at query time** (grep returns only the matching slice) rather than by injecting a full index at startup, it scales without limit as your memory grows. The skill is model-invocable and tuned to self-trigger eagerly — not only when you reference past work in another project or ask what it remembers, but proactively at the start of a task that resembles earlier work. It is read-only and cheap, so it errs toward recalling.
 
 ### Write — `/memorize` skill
 
@@ -39,7 +39,7 @@ Default behaviour writes directly. Pass `dry` to preview first and confirm befor
 /memorize dry <focus hint>         → preview with focused audit
 ```
 
-The skill is also model-invocable, so Claude can self-trigger it when memory-worthy moments are detected (corrections, validated choices, new domain context, project state changes).
+The skill is also model-invocable and tuned to self-trigger eagerly whenever a turn plausibly produced something worth keeping (corrections, validated choices, new domain context, project state changes). It audits often by design — its dedup step means frequent auditing improves recall without cluttering the store, and an empty audit is a valid outcome.
 
 Both skills complement (not replace) the built-in auto-memory. See [SPEC.md](SPEC.md) for the full design rationale, why the earlier SessionStart hook was retired, alternatives considered (mem-palace, Obsidian, OpenClaw, muse-crystal-seed, Letta, Mem0, Zep), and the relationship to Anthropic's official Memory Tool (released 2025-09-29 for the API).
 
