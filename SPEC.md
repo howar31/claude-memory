@@ -71,7 +71,7 @@ When Anthropic's Memory Tool eventually lands in Claude Code, skills at the slas
 ### 4.1 Read — `/recall` skill
 
 **Skill:** `skills/recall/SKILL.md`
-**Type:** standalone slash command (not plugin)
+**Type:** standalone slash command (also published as the `mem` plugin skill — see § 4.2, § 10.2)
 **Trigger:** user invocation (`/recall <topic>`) OR model self-invocation
 
 The skill instruction file walks Claude through retrieval:
@@ -92,7 +92,7 @@ The skill instruction file walks Claude through retrieval:
 ### 4.2 Write — `/memorize` skill
 
 **Skill:** `skills/memorize/SKILL.md`
-**Type:** standalone slash command (not plugin)
+**Type:** standalone slash command (also published as the `mem` plugin skill — see § 4.2, § 10.2)
 **Trigger:** user invocation OR model self-invocation
 
 The skill instruction file walks Claude through a six-step audit:
@@ -108,9 +108,9 @@ The skill instruction file walks Claude through a six-step audit:
 - Leading token `dry` (alone, or followed by whitespace + more text) enables preview mode; the rest is treated as the focus hint
 - Otherwise `$ARGUMENTS` is the focus hint (gives matching content priority but the audit still scans all four categories)
 
-**Why standalone instead of plugin:**
+**Why standalone *and* plugin (dual distribution):**
 
-Claude Code plugins force their skills to be namespaced as `/plugin-name:skill-name`. To keep the short slash names `/recall` and `/memorize`, the skills are installed at the standalone path `~/.claude/skills/<name>/`. `setup.sh` symlinks them there from this repo so the source-of-truth stays in version control.
+Claude Code plugins force their skills to be namespaced as `/plugin-name:skill-name`. To keep the short slash names `/recall` and `/memorize`, the **primary** install is the standalone path `~/.claude/skills/<name>/` — `setup.sh` symlinks the skills there from this repo so the source-of-truth stays in version control, and a non-Claude harness that reads `skills/<name>/SKILL.md` directly can consume them too. The same skills are *also* published as the `mem` plugin (namespaced `/mem:recall`, `/mem:memorize`) for discoverable, managed install via marketplace; see § 10.2. All paths share one `skills/` tree.
 
 **Why model-invocation is enabled (both skills):**
 
@@ -130,6 +130,9 @@ The following adjacent ideas were considered and deferred:
 claude-memory/
 ├── .gitignore
 ├── .gitattributes
+├── .claude-plugin/
+│   ├── plugin.json                      plugin manifest (name: mem)
+│   └── marketplace.json                 self-hosted single-plugin marketplace (source: "./")
 ├── LICENSE                              MIT
 ├── README.md                            human-facing intro & install
 ├── CLAUDE.md                            agent index for working in this repo
@@ -258,7 +261,9 @@ This repo's skills are a **parallel implementation at a different layer**:
 
 When Claude Code integrates the Memory Tool natively, this repo's `/recall` still adds value — the Memory Tool does not natively know about other cwds. The `/memorize` skill could likewise coexist or be retired depending on whether Memory Tool's per-tool-call writes prove sufficient. The standalone-skill paths ensure that adapting to such changes is a localised edit.
 
-## 10. Decision Log — Hook → Skill (2026-05-21)
+## 10. Decision Log
+
+### 10.1 Hook → Skill (2026-05-21)
 
 The read path migrated from a `SessionStart` hook to the `/recall` skill. Rationale, condensed from the design discussion:
 
@@ -269,6 +274,16 @@ The read path migrated from a `SessionStart` hook to the `/recall` skill. Ration
 - **Symmetry gained:** read and write are now both skills (`/recall` + `/memorize`), one paradigm instead of two.
 - **Install simplified:** no hook to wire, so the current version never writes to `settings.json` (it only strips the legacy entry on upgrade).
 - **Cost accepted:** loss of unconditional passive awareness at session start; cross-cwd recall now depends on the model noticing relevance or the user cueing it. Judged acceptable because the hook's passive awareness was already broken by truncation, and the current cwd's memory is still natively auto-loaded.
+
+### 10.2 Plugin packaging — dual distribution (2026-05-21)
+
+The skills gained a second distribution path: the `mem` Claude Code plugin, published both as a self-hosted single-plugin marketplace (this repo's `.claude-plugin/marketplace.json`, `source: "./"` → `install mem@claude-memory`) and as an entry in the central `howar31` marketplace (`install mem@howar31`). Both install the same plugin; plugin-managed skills are namespaced `/mem:recall` and `/mem:memorize`.
+
+- **Trigger:** broaden distribution beyond clone-and-`setup.sh` to discoverable, managed install (`claude plugin install` + `update`).
+- **Why keep `setup.sh` as primary:** it yields the shortest slash names (`/recall`, `/memorize`) — plugins are always namespaced and cannot — and it deploys plain skill directories that a non-Claude harness reading `skills/<name>/SKILL.md` can also consume, independent of any plugin manager.
+- **Why nearly free:** the repo's `skills/<name>/SKILL.md` layout already matches plugin auto-discovery, and both skills are self-contained (no dependency on `setup.sh` or `~/.claude/system/memory`), so the same `skills/` tree serves all three paths. The only additions are two manifests (`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`) plus one entry in the central marketplace; `setup.sh` (fixed `SKILL_DIRS` array, ignores `.claude-plugin/`) and the skill bodies are untouched.
+- **`mem` name:** the plugin name — hence the namespace — is the short handle `mem`; the project itself remains `claude-memory`. The self-hosted marketplace is named `claude-memory`, so the install id is `mem@claude-memory`. Modeled on the sibling `magi` plugin in `magi-workflow`, which uses the identical dual-marketplace pattern (`plugin.json` + a `source: "./"` `marketplace.json`, plus a central listing).
+- **Cost accepted:** users who install both a standalone copy and the plugin get the skills under two names (`/recall` and `/mem:recall`); docs advise picking one. Plugin releases require a `version` bump in `plugin.json`. Full E2E of the central path can only be exercised after the repo is pushed to GitHub (the central entry references `howar31/claude-memory` via a `github` source).
 
 ## 11. Future Extensions (Not Implemented)
 

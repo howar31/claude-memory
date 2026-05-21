@@ -102,6 +102,37 @@ If anything is unsafe to do automatically (an existing real directory at a skill
 
 Skills are picked up dynamically — run `/reload-plugins` in an active session if `/recall` and `/memorize` do not appear immediately. No restart is required (there is no hook to load).
 
+## Install as a plugin (alternative)
+
+If you prefer Claude Code's plugin manager over the symlink installer, the same skills are also published as the `mem` plugin. Plugin-managed skills are **namespaced**, so they appear as `/mem:recall` and `/mem:memorize` (the `setup.sh` method above keeps the shorter `/recall` and `/memorize` — see the trade-off below).
+
+Two registration paths install the same plugin — pick one:
+
+**Self-hosted marketplace** (this repo is its own marketplace):
+
+```bash
+claude plugin marketplace add howar31/claude-memory
+claude plugin install mem@claude-memory
+```
+
+**Central marketplace** (all of howar31's plugins; register once, future plugins appear automatically):
+
+```bash
+claude plugin marketplace add howar31/howar31-marketplace
+claude plugin install mem@howar31
+```
+
+### Which install method?
+
+| | `setup.sh` (symlink) | plugin (`mem`) |
+|---|---|---|
+| Slash names | `/recall`, `/memorize` (shortest) | `/mem:recall`, `/mem:memorize` |
+| Install / update | clone + re-run `setup.sh` | `claude plugin install` / `update` |
+| Discoverable | no | yes (via marketplace) |
+| Non-Claude harnesses | works (plain skill dirs) | depends on the harness's plugin support |
+
+Install one method or the other, not both — they would expose the same skills under two names.
+
 ## What you'll see
 
 When you reference past work in another project ("did we solve X in the other repo?", "find my preference for Y"), Claude invokes `/recall`, greps every cwd's memory, and answers from the matching entries — naming the source project. You can also call `/recall <topic>` explicitly.
@@ -121,6 +152,12 @@ If you also use [`claude-backup`](https://github.com/howar31/claude-backup) for 
 rm ~/.claude/skills/recall
 rm ~/.claude/skills/memorize
 rm ~/.claude/system/memory
+```
+
+If you installed the plugin instead:
+
+```bash
+claude plugin uninstall mem@claude-memory   # or mem@howar31
 ```
 
 There is nothing to undo in `settings.json` — the current version never writes to it.
