@@ -1,33 +1,33 @@
 #!/usr/bin/env bash
-# claude-memory setup — idempotent installer for memory hooks and skills.
+# claude-memory setup — idempotent installer for the memory skills.
 #
-# Symlinks repo hook files into ~/.claude/hooks/, repo skill directories into
-# ~/.claude/skills/, patches ~/.claude/settings.json to wire the SessionStart
-# hook, and creates ~/.claude/system/memory.
+# Symlinks repo skill directories into ~/.claude/skills/ and creates
+# ~/.claude/system/memory. Cross-cwd recall and memory writes are both skills
+# (/recall, /memorize) — there is no hook and no settings.json patch.
+#
+# Also migrates away from the legacy SessionStart hook (memory-aggregate.sh):
+# removes its symlink and its settings.json entry if a previous install left
+# them behind. The cross-cwd index is now the on-demand /recall skill.
 #
 # Safe to re-run. Backs up before any destructive action. Verifies after install.
 #
 # Flags:
 #   --dry-run   Show what would happen, don't apply
-#   --force     Replace existing real files at ~/.claude/hooks/memory-* and
-#               existing real directories at ~/.claude/skills/<skill>/
-#               (settings.json conflicts always stop — fix manually)
+#   --force     Replace existing real directories at ~/.claude/skills/<skill>/
 #   -h, --help  Show this help
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOOK_FILES=("memory-aggregate.sh")
-SKILL_DIRS=("memorize")
+SKILL_DIRS=("memorize" "recall")
 CLAUDE_HOOKS_DIR="$HOME/.claude/hooks"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 SETTINGS="$HOME/.claude/settings.json"
 SYSTEM_LINK="$HOME/.claude/system/memory"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
-SETTINGS_HOOKS=(
-  "SessionStart|.*|bash ~/.claude/hooks/memory-aggregate.sh"
-)
+# Legacy artifacts to clean up from older (hook-based) installs.
+LEGACY_HOOK="memory-aggregate.sh"
 
 DRY_RUN=0
 FORCE=0
@@ -36,7 +36,7 @@ for arg in "$@"; do
     --dry-run) DRY_RUN=1 ;;
     --force)   FORCE=1 ;;
     -h|--help)
-      sed -n '2,17p' "$0" | sed 's/^# \?//'
+      sed -n '2,21p' "$0" | sed 's/^# \?//'
       exit 0
       ;;
     *) echo "Unknown flag: $arg" >&2; exit 2 ;;
@@ -66,125 +66,60 @@ run() {
 # --- Tool dependency check ---
 header "Tool dependencies"
 missing=0
-for cmd in jq bash; do
+for cmd in grep jq bash; do
   if command -v "$cmd" >/dev/null 2>&1; then ok "$cmd"; else err "$cmd missing"; missing=1; fi
 done
 [ "$missing" -eq 1 ] && { err "Install missing dependencies and re-run"; exit 1; }
+note "grep powers /recall search; jq resolves cwd labels and migrates legacy settings"
 
-# --- Phase 1: install hook files (symlinks) ---
-header "Phase 1 — install hook files"
-mkdir -p "$CLAUDE_HOOKS_DIR"
-backup_dir="$CLAUDE_HOOKS_DIR/.bak/$TIMESTAMP"
+# --- Phase 0: migrate away from the legacy SessionStart hook ---
+header "Phase 0 — migrate legacy hook"
 
-for f in "${HOOK_FILES[@]}"; do
-  src="$SCRIPT_DIR/hooks/$f"
-  dst="$CLAUDE_HOOKS_DIR/$f"
-
-  [ -f "$src" ] || { err "Source missing: $src"; exit 1; }
-
-  if [ -L "$dst" ]; then
-    actual="$(readlink "$dst")"
-    if [ "$actual" = "$src" ]; then
-      ok "$f symlink already correct"
-    elif [ "$FORCE" -eq 1 ]; then
-      run "rm '$dst' && ln -s '$src' '$dst'"
-      ok "$f relinked (was: $actual)"
-    else
-      err "$f symlink points elsewhere: $actual"
-      err "  use --force to relink"
-      exit 1
-    fi
-  elif [ -e "$dst" ]; then
-    if cmp -s "$src" "$dst"; then
-      run "mkdir -p '$backup_dir' && mv '$dst' '$backup_dir/$f' && ln -s '$src' '$dst'"
-      ok "$f real file matched repo, symlinked (backup: $backup_dir/$f)"
-    elif [ "$FORCE" -eq 1 ]; then
-      run "mkdir -p '$backup_dir' && mv '$dst' '$backup_dir/$f' && ln -s '$src' '$dst'"
-      ok "$f real file differed, symlinked (backup: $backup_dir/$f)"
-    else
-      err "$f real file differs from repo"
-      err "  diff:"
-      diff "$dst" "$src" | sed 's/^/    /' | head -20 >&2
-      err "  use --force to backup-and-replace"
-      exit 1
-    fi
-  else
-    run "ln -s '$src' '$dst'"
-    ok "$f symlinked (fresh)"
-  fi
-done
-
-# --- Phase 2: patch settings.json ---
-header "Phase 2 — wire settings.json"
-
-[ -f "$SETTINGS" ] || { err "settings.json missing: $SETTINGS"; err "Run Claude Code at least once first"; exit 1; }
-jq . "$SETTINGS" >/dev/null 2>&1 || { err "settings.json is malformed"; exit 1; }
-
-settings_backup="$SETTINGS.bak.$TIMESTAMP"
-run "cp '$SETTINGS' '$settings_backup'"
-note "Backup: $settings_backup"
-
-settings_changed=0
-for entry in "${SETTINGS_HOOKS[@]}"; do
-  IFS='|' read -r event matcher cmd <<< "$entry"
-
-  exists=$(jq --arg ev "$event" --arg cmd "$cmd" \
-    '[(.hooks[$ev] // [])[].hooks[]? | select(.command == $cmd)] | length' \
-    "$SETTINGS")
-
-  if [ "$exists" -gt 0 ]; then
-    ok "$event hook already wired"
-    continue
-  fi
-
-  conflict=$(jq --arg ev "$event" \
-    '[(.hooks[$ev] // [])[].hooks[]? | select((.command // "") | test("memory-(aggregate|checkpoint)\\.sh"))] | length' \
-    "$SETTINGS")
-
-  if [ "$conflict" -gt 0 ]; then
-    err "$event has memory-* hook with different command:"
-    jq --arg ev "$event" \
-      '(.hooks[$ev] // [])[].hooks[]? | select((.command // "") | test("memory-")) | "    \(.command)"' \
-      -r "$SETTINGS" >&2
-    err "  expected: $cmd"
-    err "  edit settings.json manually then re-run (--force does not apply here)"
-    exit 1
-  fi
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    note "[dry-run] would add $event matcher='$matcher' command='$cmd'"
-    continue
-  fi
-
-  tmp="$SETTINGS.tmp.$$"
-  jq --arg ev "$event" --arg matcher "$matcher" --arg cmd "$cmd" '
-    .hooks //= {} |
-    .hooks[$ev] //= [] |
-    if (.hooks[$ev] | map(.matcher == $matcher) | any) then
-      .hooks[$ev] |= map(
-        if .matcher == $matcher then
-          .hooks += [{type: "command", command: $cmd}]
-        else . end
-      )
-    else
-      .hooks[$ev] += [{matcher: $matcher, hooks: [{type: "command", command: $cmd}]}]
-    end
-  ' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
-
-  ok "$event hook added"
-  settings_changed=1
-done
-
-if ! jq . "$SETTINGS" >/dev/null 2>&1; then
-  err "settings.json corrupted after patch — restoring backup"
-  cp "$settings_backup" "$SETTINGS"
-  exit 1
+legacy_path="$CLAUDE_HOOKS_DIR/$LEGACY_HOOK"
+if [ -L "$legacy_path" ] || [ -e "$legacy_path" ]; then
+  run "rm -f '$legacy_path'"
+  ok "removed legacy hook: $legacy_path"
+else
+  note "no legacy hook symlink"
 fi
 
-[ "$settings_changed" -eq 0 ] && note "settings.json unchanged"
+if [ -f "$SETTINGS" ] && jq . "$SETTINGS" >/dev/null 2>&1; then
+  legacy_in_settings=$(jq '[(.hooks.SessionStart // [])[].hooks[]? | select((.command // "") | test("memory-(aggregate|checkpoint)\\.sh"))] | length' "$SETTINGS")
+  if [ "$legacy_in_settings" -gt 0 ]; then
+    settings_backup="$SETTINGS.bak.$TIMESTAMP"
+    run "cp '$SETTINGS' '$settings_backup'"
+    note "Backup: $settings_backup"
+    if [ "$DRY_RUN" -eq 1 ]; then
+      note "[dry-run] would strip $legacy_in_settings legacy memory-* SessionStart hook entr(y/ies)"
+    else
+      tmp="$SETTINGS.tmp.$$"
+      # Drop matching commands; drop matcher blocks left with no hooks; drop SessionStart if left empty.
+      jq '
+        if (.hooks.SessionStart // null) == null then .
+        else
+          .hooks.SessionStart |= ( map(
+              .hooks |= map(select((.command // "") | test("memory-(aggregate|checkpoint)\\.sh") | not))
+            ) | map(select((.hooks | length) > 0)) )
+          | if (.hooks.SessionStart | length) == 0 then del(.hooks.SessionStart) else . end
+        end
+      ' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+      if jq . "$SETTINGS" >/dev/null 2>&1; then
+        ok "stripped legacy SessionStart hook from settings.json"
+      else
+        err "settings.json corrupted after migration — restoring backup"
+        cp "$settings_backup" "$SETTINGS"
+        exit 1
+      fi
+    fi
+  else
+    note "no legacy hook in settings.json"
+  fi
+else
+  note "settings.json absent or unreadable — skipping settings migration"
+fi
 
-# --- Phase 3: backwards-compat symlink ---
-header "Phase 3 — system link"
+# --- Phase 1: system link ---
+header "Phase 1 — system link"
 mkdir -p "$HOME/.claude/system"
 if [ -L "$SYSTEM_LINK" ]; then
   if [ "$(readlink "$SYSTEM_LINK")" = "$SCRIPT_DIR" ]; then
@@ -203,9 +138,10 @@ else
   ok "$SYSTEM_LINK linked → $SCRIPT_DIR"
 fi
 
-# --- Phase 4: install skill directories (symlinks) ---
-header "Phase 4 — install skill directories"
+# --- Phase 2: install skill directories (symlinks) ---
+header "Phase 2 — install skill directories"
 mkdir -p "$CLAUDE_SKILLS_DIR"
+backup_dir="$CLAUDE_SKILLS_DIR/.bak/$TIMESTAMP"
 
 for d in "${SKILL_DIRS[@]}"; do
   src="$SCRIPT_DIR/skills/$d"
@@ -241,20 +177,9 @@ for d in "${SKILL_DIRS[@]}"; do
   fi
 done
 
-# --- Phase 5: verify ---
-header "Phase 5 — verify"
+# --- Phase 3: verify ---
+header "Phase 3 — verify"
 fail=0
-
-verify_link() {
-  local f="$1"; local label="$2"
-  local path="$CLAUDE_HOOKS_DIR/$f"
-  if [ ! -L "$path" ]; then err "$label: $path not a symlink"; fail=1; return; fi
-  local target; target="$(readlink "$path")"
-  if [ "$target" != "$SCRIPT_DIR/hooks/$f" ]; then
-    err "$label: symlink → $target (expected repo)"; fail=1; return
-  fi
-  ok "$label symlink → repo"
-}
 
 verify_skill() {
   local d="$1"
@@ -276,41 +201,27 @@ verify_skill() {
   ok "skill $d SKILL.md frontmatter ok"
 }
 
-verify_link "memory-aggregate.sh" "memory-aggregate.sh"
-
-if smoke=$(echo '{"cwd":"/__verify__","session_id":"v"}' | bash "$CLAUDE_HOOKS_DIR/memory-aggregate.sh" 2>&1); then
-  if [ -z "$smoke" ]; then
-    note "smoke test: empty output (no other-cwd memories yet — expected on fresh machine)"
-  elif echo "$smoke" | grep -q "Cross-cwd memory index"; then
-    ok "smoke test: header emitted"
-  else
-    err "smoke test: unexpected output"; fail=1
-  fi
-else
-  err "smoke test: script failed"; fail=1
-fi
-
 for d in "${SKILL_DIRS[@]}"; do
   verify_skill "$d"
 done
 
-for entry in "${SETTINGS_HOOKS[@]}"; do
-  IFS='|' read -r event _ cmd <<< "$entry"
-  count=$(jq --arg ev "$event" --arg cmd "$cmd" \
-    '[(.hooks[$ev] // [])[].hooks[]? | select(.command == $cmd)] | length' \
-    "$SETTINGS")
-  if [ "$count" -gt 0 ]; then
-    ok "settings.json: $event wired"
-  else
-    err "settings.json: $event NOT wired"; fail=1
-  fi
-done
+# Confirm the legacy hook is fully gone.
+if [ -L "$CLAUDE_HOOKS_DIR/$LEGACY_HOOK" ] || [ -e "$CLAUDE_HOOKS_DIR/$LEGACY_HOOK" ]; then
+  err "legacy hook still present at $CLAUDE_HOOKS_DIR/$LEGACY_HOOK"; fail=1
+else
+  ok "no legacy hook artifact"
+fi
+if [ -f "$SETTINGS" ] && jq . "$SETTINGS" >/dev/null 2>&1; then
+  leftover=$(jq '[(.hooks.SessionStart // [])[].hooks[]? | select((.command // "") | test("memory-(aggregate|checkpoint)\\.sh"))] | length' "$SETTINGS")
+  if [ "$leftover" -gt 0 ]; then err "legacy hook still wired in settings.json"; fail=1; else ok "settings.json clean of legacy hook"; fi
+fi
 
 # --- Summary ---
 header "Summary"
 if [ "$fail" -eq 0 ]; then
-  printf '  %sAll checks passed.%s Memory system fully operational.\n\n' "$C_OK" "$C_RST"
-  printf '  Restart Claude Code to load the SessionStart hook.\n'
+  printf '  %sAll checks passed.%s Memory skills installed.\n\n' "$C_OK" "$C_RST"
+  printf '  /recall   — search memory across all project cwds (read)\n'
+  printf '  /memorize — audit this session and persist entries (write)\n\n'
   printf '  Skills are picked up dynamically; run /reload-plugins in an active session if needed.\n'
   exit 0
 else

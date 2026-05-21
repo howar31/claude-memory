@@ -87,3 +87,4 @@ Print a short summary: filenames written, filenames updated, and confirmation th
 - Do **not** save: ephemeral task state, rediscoverable code patterns, content already in CLAUDE.md, or this conversation's summary text.
 - If unsure whether something is worth saving, lean toward saving — an extra entry beats a lost one.
 - Default behaviour is to write directly. Use `dry` mode for explicit preview-first; or honour an in-conversation override like "先給我看" without requiring the flag.
+- This skill writes memory. To search/recall existing memory across all project cwds (read), use `/recall`.
