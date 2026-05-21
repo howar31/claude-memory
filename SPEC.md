@@ -12,7 +12,7 @@ Memory is namespaced by cwd. Each working directory becomes its own folder under
 
 This becomes most painful when substantial work performed in a sub-project cwd is later referenced from the parent or a sibling cwd, because Claude only loads the current cwd's `MEMORY.md` at startup — even though the relevant entry exists, just one folder over.
 
-A `SessionStart` hook closes this gap by injecting a cross-cwd index at the start of every session.
+The `/recall` skill closes this gap by searching every cwd's memory on demand and reading the relevant entries.
 
 ### 1.2 Write-rate variance (write-time)
 
@@ -22,59 +22,72 @@ The `/memorize` skill closes this gap. It is a slash command (and model-invocabl
 
 ## 2. Alternatives Considered
 
-Before settling on hooks, the author surveyed several memory-system architectures. The matrix below is the relevant excerpt; full notes from the survey are kept in the user's session transcripts.
+Before settling on a filesystem-native approach, the author surveyed several memory-system architectures. The matrix below is the relevant excerpt; full notes from the survey are kept in the user's session transcripts.
 
 | System | Core idea | Why not adopted |
 |---|---|---|
-| [mem-palace](https://github.com/mempalace/mempalace) | Local-first verbatim transcript storage with hybrid semantic/lexical search; `wings/rooms/drawers` structure | Adds a vector DB stack; English-only default embedder needs replacement for the user's CJK conversations; overkill at the current memory volume (~64 entries) |
+| [mem-palace](https://github.com/mempalace/mempalace) | Local-first verbatim transcript storage with hybrid semantic/lexical search; `wings/rooms/drawers` structure | Adds a vector DB stack; English-only default embedder needs replacement for the user's CJK conversations; overkill at the current memory volume |
 | [Obsidian + Basic Memory](https://docs.basicmemory.com/integrations/obsidian) | Markdown vault with `[[wiki-links]]`; Claude reads/writes via MCP | User's `Applied Learning` rule prefers CLI over MCP; introduces a vault-management workflow the user does not need yet; Obsidian's value (graph view, manual curation) is orthogonal to the cross-cwd silo problem |
 | [Karpathy LLM Wiki / claude-obsidian](https://github.com/AgriciDaniel/claude-obsidian) | `/wiki`, `/save`, `/autoresearch` slash commands compile sessions into a maintained wiki of 10–15 pages | Requires conscious workflow discipline; useful long-term but does not address per-cwd memory invisibility |
 | [OpenClaw](https://github.com/openclaw/openclaw) | Multi-layer plugin pipeline; daily logs → recall signals → background "dreaming sweep" → promoted into `MEMORY.md`; pluggable QMD / LanceDB / Honcho backends; CJK FTS5 trigram | OpenClaw is a separate AI-assistant gateway, not a Claude Code add-on; concepts inform a possible future promotion roadmap |
 | [muse-crystal-seed](https://github.com/frank890417/muse-crystal-seed) | Seven-file agent decomposition (SOUL/IDENTITY/USER/MEMORY/AGENTS/HEARTBEAT/TOOLS); `after-action` skill enforces a six-step closing checklist; `Lesson Graduation` system for chronic feedback | The `Lesson Graduation` mechanism is held back as a future extension once the existing `Applied Learning` log accumulates enough entries to justify it |
 | [Letta / MemGPT](https://github.com/letta-ai/letta) | OS virtual-memory metaphor (Core / Recall / Archival); agent runs inside Letta runtime | Wrong scope — would require migrating off Claude Code, not augmenting it |
-| [Mem0](https://github.com/mem0ai/mem0) | Three-tier scope (user/session/agent), hybrid vector + graph + KV; drop-in API | API service; would introduce a vector DB and a service dependency for a problem that filesystem hooks solve |
+| [Mem0](https://github.com/mem0ai/mem0) | Three-tier scope (user/session/agent), hybrid vector + graph + KV; drop-in API | API service; would introduce a vector DB and a service dependency for a problem that filesystem skills solve |
 | [Zep / Graphiti](https://github.com/getzep/zep) | Temporal knowledge graph with fact-validity windows; ~63.8% on LongMemEval (vs Mem0 49.0%) | Architecturally interesting for "what was true on date X" queries, but daily-log dates already suffice for the user's current need |
-| [Anthropic Memory Tool (`memory_20250818`)](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) | API-layer client-side tool with `view/create/str_replace/insert/delete/rename` over a `/memories` virtual directory; pairs with context editing | The official direction. As of writing, Claude Code's CLI auto-memory has not integrated it; this repo's hooks are a parallel implementation at the lifecycle-event layer rather than the tool-call layer. See § 9 for coexistence notes |
+| [Anthropic Memory Tool (`memory_20250818`)](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) | API-layer client-side tool with `view/create/str_replace/insert/delete/rename` over a `/memories` virtual directory; pairs with context editing | The official direction. As of writing, Claude Code's CLI auto-memory has not integrated it; this repo's skills are a parallel implementation at the slash-command layer rather than the tool-call layer. See § 9 for coexistence notes |
 
-## 3. Why Hooks
-
-Two design pressures favored hooks over every other option in § 2:
+## 3. Why Skills (and why not a hook)
 
 ### 3.1 Scope alignment
 
-Claude Code already keeps memory as plain markdown files at known paths. Any other system in § 2 introduces either a database, a service, an MCP server, or an external app. Hooks are the lowest-overhead extension point that operates on the existing filesystem with zero new dependencies and stays compatible with the user's `Applied Learning` rule of "prefer CLI over MCP."
+Claude Code already keeps memory as plain markdown files at known paths. Any other system in § 2 introduces either a database, a service, an MCP server, or an external app. Skills are the lowest-overhead extension point that operates on the existing filesystem with zero new dependencies and stays compatible with the user's `Applied Learning` rule of "prefer CLI over MCP."
 
-### 3.2 Forward compatibility
+### 3.2 The read path was a hook — until the 10,000-char cap broke it
 
-When Anthropic's Memory Tool eventually lands in Claude Code, hooks at the lifecycle layer remain orthogonal to a tool firing per tool call. The two can coexist; § 9 discusses migration paths.
+The original design injected the cross-cwd index via a `SessionStart` hook (`hooks/memory-aggregate.sh`). It enumerated every entry of every other cwd's `MEMORY.md` and printed the block to stdout, which Claude Code injects as session context.
+
+This worked at low memory volume and failed as memory grew. **Claude Code caps hook output strings at 10,000 characters** — and the cap applies uniformly to plain `stdout`, `hookSpecificOutput.additionalContext`, and `systemMessage`. Output that exceeds the cap is saved to a file and replaced with a ~2 KB preview + file path, exactly the way large tool results are handled (source: <https://code.claude.com/docs/en/hooks>).
+
+Once the aggregated index passed ~10 KB (it reached ~24 KB at ~120 entries across 17 cwds), the model received only a 2 KB preview — which, being a head-truncation, contained just the first cwd's entries. The other ~16 cwds silently vanished from context, and the spill file is not auto-read. The failure was silent and position-biased: the index appeared to work but covered a single project.
+
+Three escape attempts were rejected:
+
+- **Switch stdout → `additionalContext` JSON.** Same 10,000-char cap; no help. (Verified: the superpowers plugin injects its `using-superpowers` skill via exactly this path and fits only because the file is 5,421 bytes, under the cap — not because the channel is exempt.)
+- **Compress the index** (cwd-level table of contents, drop per-entry descriptions, self-truncate). Any enumeration grows with memory volume; compression only postpones the cap and degrades the index into something too terse to judge relevance from. A losing battle by construction.
+- **Hybrid (slim hook + skill).** Splits the read path across two mechanisms — the very ambiguity ("hook or skill?") this redesign exists to remove.
+
+### 3.3 Skills resolve it structurally
+
+The fix is to stop *injecting* and start *retrieving*. A skill's body loads on demand via the Skill tool; its always-on cost is just the one-line `description` in the skill listing (itself capped at 1,536 chars per skill, budget ≈ 1% of the context window, least-used descriptions trimmed first on overflow — never the whole skill). Crucially, retrieval returns only the **relevant slice** of memory, so nothing that scales with total memory volume is ever placed in context.
+
+This mirrors how the superpowers plugin scales to arbitrarily many skills: it injects one constant-size *router* (`using-superpowers`) that says "use the Skill tool for everything else," and loads each skill body only when invoked. `/recall` applies the same router/content separation to memory: a constant-size capability (the skill's description), unbounded content fetched at query time.
+
+### 3.4 Forward compatibility
+
+When Anthropic's Memory Tool eventually lands in Claude Code, skills at the slash-command layer remain orthogonal to a tool firing per tool call. The two can coexist; § 9 discusses migration paths.
 
 ## 4. Architecture
 
-### 4.1 Read — Cross-cwd index (SessionStart hook)
+### 4.1 Read — `/recall` skill
 
-**Hook:** `SessionStart`
-**Script:** `hooks/memory-aggregate.sh`
-**Trigger:** every session start, every source (`startup`, `resume`, `clear`, `compact`)
+**Skill:** `skills/recall/SKILL.md`
+**Type:** standalone slash command (not plugin)
+**Trigger:** user invocation (`/recall <topic>`) OR model self-invocation
 
-On fire, the script:
+The skill instruction file walks Claude through retrieval:
 
-1. Reads the hook event JSON from stdin and extracts the current cwd
-2. Iterates every `~/.claude/projects/*/memory/MEMORY.md`
-3. For each, resolves the actual cwd by reading the first line of the most recent `*.jsonl` transcript in that project directory (each transcript record carries a `cwd` field — this avoids the lossy filename-encoding decode)
-4. Skips the current cwd (its `MEMORY.md` is already auto-loaded)
-5. Skips empty `MEMORY.md` files
-6. Emits a `<system-reminder>` block listing per-cwd:
-   - The decoded cwd path
-   - The number of `^- ` index entries
-   - The full set of index lines (one-line pointers, already short by `MEMORY.md` discipline)
-
-The output also includes prescriptive guidance for Claude on when to consult the index (cross-project topic match, explicit user reference) and when to ignore it (task fully scoped to current cwd).
+1. **Parse `$ARGUMENTS`** — the search topic. If empty, infer the topic from the conversation; if still ambiguous, ask before searching.
+2. **Derive search terms** — memory files are written in English but the user often converses in Traditional Chinese, so translate the topic to likely English keywords and add synonyms, variants, and symbol forms (recall is conceptual, not exact-match).
+3. **Search** — case-insensitive recursive grep over every `~/.claude/projects/*/memory/` (both per-entry `*.md` and `MEMORY.md`); broaden on zero hits, narrow on too many.
+4. **Read** the matching entry files for full content.
+5. **Resolve project labels** only if precision is needed — the folder name is usually readable; otherwise read the latest `*.jsonl` transcript's `cwd` field (the folder-name encoding is lossy, so the transcript is authoritative).
+6. **Report** — lead with the conclusion, cite each memory's source project + filename; an empty recall is a valid result.
 
 **Why this design:**
 
-- **Index, not content** — emitting only the one-line pointers (titled summaries) keeps the SessionStart token cost low; Claude reads source files via the standard `Read` tool when an entry looks relevant. Average emitted block is on the order of 10 KB at 60–70 entries.
-- **Decode via transcript, not filename** — the `~/.claude/projects/<encoded-cwd>` filename encoding is lossy (`/`, `_`, `.` all map to `-`), so reverse-decoding the cwd from the folder name is unreliable. The transcript's `cwd` field is authoritative.
-- **`<system-reminder>` wrapper** — signals to Claude that this is system-injected context, not user input, and aligns with the format Claude Code uses internally.
+- **Retrieve, don't inject** — grep returns only the matching subset, so the read path never places content into context that scales with total memory volume. This is the structural fix for the hook's 10,000-char cap (§ 3.2).
+- **grep is the whole engine** — no helper script. The skill is self-contained: `SKILL.md` *is* the implementation. This keeps it portable (no path-coupled dependency to install) and avoids reintroducing custom bash that can break across platforms (BSD vs GNU). The retired hook's only unique feature — resolving the lossy folder-name encoding to a real cwd — is folded into the skill as an optional one-liner applied to matched projects only, not all of them.
+- **Search includes the current cwd** — its `MEMORY.md` index is auto-loaded, but its individual entry bodies are not, so they are still worth grepping.
 
 ### 4.2 Write — `/memorize` skill
 
@@ -97,22 +110,19 @@ The skill instruction file walks Claude through a six-step audit:
 
 **Why standalone instead of plugin:**
 
-Claude Code plugins force their skills to be namespaced as `/plugin-name:skill-name`. To keep the short slash name `/memorize`, the skill must be installed at the standalone path `~/.claude/skills/memorize/`. `setup.sh` symlinks it there from this repo so the source-of-truth stays in version control.
+Claude Code plugins force their skills to be namespaced as `/plugin-name:skill-name`. To keep the short slash names `/recall` and `/memorize`, the skills are installed at the standalone path `~/.claude/skills/<name>/`. `setup.sh` symlinks them there from this repo so the source-of-truth stays in version control.
 
-**Why not a hook:**
+**Why model-invocation is enabled (both skills):**
 
-An earlier draft used `PreCompact` and `SessionEnd` hooks to inject a four-question audit before context loss. Both empirically failed: `PreCompact` stdout reaches the model but is suppressed by the concurrent compact-summary task, and `SessionEnd` stdout/stderr is shown to the user only and never reaches the model. A model-invocable skill executes in a normal turn with full tool access, sidestepping both failure modes.
-
-**Why model-invocation is enabled:**
-
-The skill's frontmatter omits `disable-model-invocation: true`, so Claude can self-trigger `/memorize` when it detects memory-worthy moments mid-conversation. This complements (but does not replace) explicit user invocation. The `description` field enumerates trigger conditions for the model's auto-decision logic.
+Neither skill's frontmatter sets `disable-model-invocation: true`, so Claude can self-trigger them. The `description` field of each enumerates concrete trigger phrases (Traditional Chinese + English) so the model's auto-decision fires reliably — auto-invocation is judgment-based (the model reads the description each turn), not event-deterministic like a hook, so the description is the only lever for trigger quality.
 
 ### 4.3 Trade-offs not made
 
 The following adjacent ideas were considered and deferred:
 
-- **UserPromptSubmit hook for active prefetch** (à la OpenClaw `active-memory`) — a more ambitious version of cross-cwd injection that pulls in relevant memory before each user turn, not just at session start. Held until the SessionStart index proves insufficient in practice.
-- **Lesson Graduation** — porting muse-crystal-seed's `active`/`graduated`/`chronic` state machine to the global `Applied Learning` log. Held until that log accumulates ≥ 5 entries (currently 1).
+- **A residual SessionStart pointer.** A constant-size hook ("you have N cross-cwd memories; use /recall") would restore unconditional passive awareness. Dropped to keep the read path a single mechanism; `/recall`'s always-loaded description provides awareness that the capability exists, and the cross-cwd tier is inherently lower-relevance content that is fine to fetch on demand. The accepted cost: recall of another project's memory now requires the model to actively notice relevance (or the user to cue it), rather than being passively injected.
+- **UserPromptSubmit hook for active prefetch** (à la OpenClaw `active-memory`) — pulling relevant memory before each user turn. Held until `/recall` proves insufficient in practice. (Subject to the same 10,000-char output cap, so it would need the same retrieve-don't-inject discipline.)
+- **Lesson Graduation** — porting muse-crystal-seed's `active`/`graduated`/`chronic` state machine to the global `Applied Learning` log. Held until that log accumulates enough entries to justify the state-machine overhead.
 
 ## 5. File Layout
 
@@ -125,142 +135,78 @@ claude-memory/
 ├── CLAUDE.md                            agent index for working in this repo
 ├── SPEC.md                              this document
 ├── setup.sh                             idempotent installer + verifier
-├── hooks/
-│   └── memory-aggregate.sh              SessionStart hook
 └── skills/
+    ├── recall/
+    │   └── SKILL.md                     /recall slash command (read)
     └── memorize/
-        └── SKILL.md                     /memorize slash command
+        └── SKILL.md                     /memorize slash command (write)
 ```
 
 After install, the deployed surface is:
 
 ```
-~/.claude/hooks/
-  memory-aggregate.sh           -> /opt/projects/claude-memory/hooks/memory-aggregate.sh
-
 ~/.claude/skills/
+  recall                        -> /opt/projects/claude-memory/skills/recall
   memorize                      -> /opt/projects/claude-memory/skills/memorize
 
 ~/.claude/system/memory         -> /opt/projects/claude-memory   (operational pointer)
-
-~/.claude/settings.json
-  hooks.SessionStart   includes  bash ~/.claude/hooks/memory-aggregate.sh
 ```
 
-The repo is the single source of truth. Hooks at `~/.claude/hooks/` are symlinks back into the repo, so editing through either path stages the same file. The repo's location is portable (`SCRIPT_DIR=$(cd $(dirname $0) && pwd)` resolves at runtime).
+No hook is installed; `settings.json` is not modified by the current version (the installer only *removes* a legacy hook entry if one is present — see § 8). The repo is the single source of truth. Skill dirs at `~/.claude/skills/` are symlinks back into the repo, so editing through either path stages the same file. The repo's location is portable (`SCRIPT_DIR=$(cd $(dirname $0) && pwd)` resolves at runtime).
 
 ## 6. Install Flow (`setup.sh`)
 
-The installer runs five phases plus a tool dependency check, in order:
+The installer runs a tool dependency check plus four phases, in order:
 
 ### 6.1 Tool dependency check
 
-Verifies `jq` and `bash` are on `PATH`. Aborts with remediation hint if either is missing.
+Verifies `grep`, `jq`, and `bash` are on `PATH`. `grep` powers `/recall` search; `jq` resolves cwd labels at runtime and performs the legacy-settings migration. Aborts with remediation hint if any is missing.
 
-### 6.2 Phase 1 — install hook files
+### 6.2 Phase 0 — migrate legacy hook
 
-For each artifact (currently just `memory-aggregate.sh`):
+Removes artifacts from older hook-based installs so an upgrade is clean:
 
-| State at `~/.claude/hooks/<file>` | Action |
+| Legacy artifact | Action |
 |---|---|
-| Symlink already pointing at repo | Skip, mark ok |
-| Symlink pointing elsewhere | Halt unless `--force`; with `--force`, relink |
-| Real file with content matching repo | Move real file to `~/.claude/hooks/.bak/<timestamp>/`, then symlink |
-| Real file with content differing from repo | Halt with diff unless `--force`; with `--force`, back up and replace |
-| Absent | Symlink |
+| `~/.claude/hooks/memory-aggregate.sh` symlink/file | Remove |
+| `settings.json` `SessionStart` entry matching `memory-(aggregate\|checkpoint)\.sh` | Strip via `jq` (removal-only; see § 8 discipline) |
 
-### 6.3 Phase 2 — wire `settings.json`
+If `settings.json` is absent or unreadable, the settings migration is skipped (nothing to clean).
 
-For each required hook entry (currently just one):
-
-```
-SessionStart  matcher='.*'  command='bash ~/.claude/hooks/memory-aggregate.sh'
-```
-
-| State in `settings.json` for this event | Action |
-|---|---|
-| Entry with exact-matching command exists | Skip, mark ok |
-| `memory-*` entry exists with a different command | Halt with diff and remediation hint (no `--force` override) |
-| Entry absent | Add via `jq` |
-
-The patch always:
-
-1. Backs up `settings.json` to `settings.json.bak.<timestamp>` first
-2. Computes the new content into a temp file
-3. `mv` to the destination atomically
-4. Re-validates JSON; on failure restores from backup
-
-The `jq` insertion logic is:
-
-```jq
-.hooks //= {} |
-.hooks[$ev] //= [] |
-if (.hooks[$ev] | map(.matcher == $matcher) | any) then
-  # add to existing matcher block
-  .hooks[$ev] |= map(
-    if .matcher == $matcher then
-      .hooks += [{type: "command", command: $cmd}]
-    else . end
-  )
-else
-  # create new matcher block
-  .hooks[$ev] += [{matcher: $matcher, hooks: [{type: "command", command: $cmd}]}]
-end
-```
-
-### 6.4 Phase 3 — system link
+### 6.3 Phase 1 — system link
 
 Creates `~/.claude/system/memory` → repo path. Idempotent: skip if symlink already correct, halt on real-path occupation, relink with `--force` on wrong-target.
 
-### 6.5 Phase 4 — install skill directories
+### 6.4 Phase 2 — install skill directories
 
-For each entry in `SKILL_DIRS` (currently `memorize`):
+For each entry in `SKILL_DIRS` (`recall`, `memorize`):
 
 | State at `~/.claude/skills/<dir>` | Action |
 |---|---|
 | Symlink already pointing at repo | Skip, mark ok |
 | Symlink pointing elsewhere | Halt unless `--force`; with `--force`, relink |
-| Real directory | Halt unless `--force`; with `--force`, move to `~/.claude/hooks/.bak/<timestamp>/skill-<dir>/`, then symlink |
+| Real directory | Halt unless `--force`; with `--force`, move to `~/.claude/skills/.bak/<timestamp>/skill-<dir>/`, then symlink |
 | Absent | Symlink |
 
 The skill source must contain a `SKILL.md` file; phase aborts if absent.
 
-### 6.6 Phase 5 — verify
+### 6.5 Phase 3 — verify
 
 Runs *after* every install phase, regardless of whether they wrote anything:
 
-- Each deployed hook path must be a symlink whose target matches the repo file
 - Each deployed skill path must be a symlink whose target matches the repo skill directory; the linked `SKILL.md` must declare a matching `name:` frontmatter field
-- Smoke test: pipe a fake `cwd` JSON to `memory-aggregate.sh`; expect either empty output (fresh machine) or the `Cross-cwd memory index` header
-- Each `settings.json` event must contain the exact-match command
+- No legacy hook artifact may remain at `~/.claude/hooks/memory-aggregate.sh`
+- `settings.json`, if present, must be clean of any `memory-(aggregate|checkpoint)\.sh` `SessionStart` entry
 
-If any check fails, the summary line is `Verification failed`. This is the answer to "if setup skipped, will the user know when something is wrong?" — the verify phase tests the deployed state directly, not the patch outcome.
+If any check fails, the summary line is `Verification failed`. The verify phase tests the deployed state directly, not the patch outcome. (Note: under `--dry-run`, freshly-planned links are not actually created, so verify reports them as not-yet-applied — expected.)
 
-### 6.7 Flags
+### 6.6 Flags
 
 - `--dry-run` — print every action that would be taken; do nothing
-- `--force` — replace existing `~/.claude/hooks/memory-*` files and existing `~/.claude/skills/<dir>` directories even if content differs (settings.json conflicts still halt)
+- `--force` — replace existing `~/.claude/skills/<dir>` directories even if they are real dirs
 - `-h` / `--help` — print top-of-file documentation
 
-## 7. Hook & Skill Contracts
-
-### 7.1 Hook contract
-
-Every hook script in this repo follows the same contract:
-
-**Inputs**
-- `stdin` — JSON object emitted by Claude Code, containing `session_id`, `cwd`, `transcript_path`, and event-specific fields. Read but tolerated as empty if missing
-- Environment variables — none required; `$HOME` used implicitly via the script's path resolution
-
-**Outputs**
-- `stdout` — text content. For `SessionStart`, this becomes additional context injected into Claude's session
-- Exit code — always `0`. The trap `trap 'exit 0' ERR` ensures any internal error degrades to a no-op rather than blocking Claude Code's lifecycle event
-
-**Format conventions**
-- Output is wrapped in `<system-reminder>...</system-reminder>` to mark it as system-injected context
-- The wrapped content uses Markdown where useful but stays terse — Claude is the consumer, not a human reader
-
-### 7.2 Skill contract
+## 7. Skill Contract
 
 Every skill in this repo follows this layout:
 
@@ -268,28 +214,29 @@ Every skill in this repo follows this layout:
 - `skills/<name>/SKILL.md` — required; the only file Claude Code's standalone-skill loader needs
 
 **Frontmatter (YAML)**
-- `name` — must match the directory name; setup.sh verify enforces this
-- `description` — used for the slash-command listing AND model-invocation decision; must enumerate trigger conditions when model-invocation is enabled
-- `disable-model-invocation: true` — set only when the skill should be exclusively user-invocable
+- `name` — must match the directory name; `setup.sh` verify enforces this
+- `description` — used for the slash-command listing AND model-invocation decision; must enumerate concrete trigger phrases (zh + en) when model-invocation is enabled, since auto-invocation is judgment-based and the description is the only lever. Combined `description` text is capped at 1,536 chars in the listing (configurable via `maxSkillDescriptionChars`)
+- `disable-model-invocation: true` — set only when a skill should be exclusively user-invocable (neither current skill sets it)
 
 **Body conventions**
 - English instructions (per the user's `Doc Language` rule)
 - Numbered steps the model executes in order
 - Use `$ARGUMENTS` for runtime input; document the parsing convention near the top
-- For destructive defaults (write/commit/delete), provide an explicit opt-in confirmation flag (e.g. `dry`)
+- For destructive defaults (write/commit/delete), provide an explicit opt-in confirmation flag (e.g. `/memorize dry`); read-only skills (`/recall`) need none
+- No path-coupled helper scripts — a skill should be self-contained so it stays portable
 
-## 8. settings.json Patch Discipline
+## 8. Legacy Hook Migration & settings.json Discipline
 
-This is the highest-risk surface in the project: a malformed write would break Claude Code's startup. Discipline:
+The current version **never adds** to `settings.json`. The only `settings.json` interaction is the one-time *removal* of a legacy `SessionStart` hook entry during Phase 0. That removal still follows the strict discipline established when the project did patch settings (a malformed write would break Claude Code's startup):
 
 1. **Never write the whole file.** Only `jq`-mediated edits.
 2. **Always back up.** `settings.json.bak.<timestamp>` is written before any mutation.
 3. **Atomic write.** New content goes to a temp path, then `mv` replaces the original.
-4. **Validate before and after.** `jq . settings.json >/dev/null` is run before reading and after writing.
+4. **Validate after.** `jq . settings.json >/dev/null` is run after writing.
 5. **Restore on corruption.** If the post-write validation fails, the backup is restored automatically.
-6. **Never silently overwrite a conflict.** A `memory-*` entry with a different command stops the install; user resolves manually.
+6. **Prune empties.** Matcher blocks left with no hooks are dropped; `SessionStart` is removed entirely if left empty.
 
-The author considered exposing a `--force` for settings.json conflicts and rejected it: a wrong settings.json is worse than a no-op install, and the cost of human review on conflict is bounded.
+Plugin-registered `SessionStart` hooks (e.g. the superpowers plugin) live in plugin `hooks.json`, not in `~/.claude/settings.json`, and are therefore untouched by this migration.
 
 ## 9. Relationship to Anthropic Memory Tool
 
@@ -299,45 +246,59 @@ Anthropic announced the Memory Tool (`memory_20250818`) and context editing on *
 - Provides `view/create/str_replace/insert/delete/rename` commands over a `/memories` virtual directory
 - Pairs with context editing: when context approaches the limit, old tool results are auto-cleared and Claude is warned to save important content into memory first
 
-This repo's hooks are a **parallel implementation at a different layer**:
+This repo's skills are a **parallel implementation at a different layer**:
 
 | Layer | Native Claude Code | Anthropic Memory Tool | This repo |
 |---|---|---|---|
 | Where memory lives | `~/.claude/projects/<cwd>/memory/` | `/memories/` (client-defined) | Same as native |
-| Read trigger | Auto-load `MEMORY.md` at session start | Tool call when needed | SessionStart hook augments with cross-cwd index |
+| Read trigger | Auto-load `MEMORY.md` at session start | Tool call when needed | `/recall` skill greps all cwds on demand |
 | Write trigger | Model self-judgment in conversation | Tool call when needed | `/memorize` skill (user or model invokes explicitly) |
-| Granularity | Per-turn (model decision) | Per-tool-call | Per-session-start (read) + per-invocation (write) |
+| Granularity | Per-turn (model decision) | Per-tool-call | Per-invocation (both read and write) |
 | Status in Claude Code CLI | Active | Not yet integrated (as of this writing) | Active |
 
-When Claude Code integrates the Memory Tool natively, this repo's SessionStart augmentation still adds value — the Memory Tool does not natively know about other cwds. The `/memorize` skill could likewise coexist or be retired depending on whether Memory Tool's per-tool-call writes prove sufficient. The portable `~/.claude/hooks/memory-*.sh` and standalone-skill paths ensure that adapting to such changes is a localised edit.
+When Claude Code integrates the Memory Tool natively, this repo's `/recall` still adds value — the Memory Tool does not natively know about other cwds. The `/memorize` skill could likewise coexist or be retired depending on whether Memory Tool's per-tool-call writes prove sufficient. The standalone-skill paths ensure that adapting to such changes is a localised edit.
 
-## 10. Future Extensions (Not Implemented)
+## 10. Decision Log — Hook → Skill (2026-05-21)
 
-### 10.1 Lesson Graduation
+The read path migrated from a `SessionStart` hook to the `/recall` skill. Rationale, condensed from the design discussion:
+
+- **Trigger:** the cross-cwd index hook silently degraded as memory grew. Empirically, a ~24 KB injected index was truncated to a ~2 KB head preview; ~16 of 17 cwds disappeared from context, undetected.
+- **Root cause:** Claude Code caps hook output at 10,000 characters across `stdout` / `additionalContext` / `systemMessage` alike (<https://code.claude.com/docs/en/hooks>). Over-cap output spills to a file the model does not auto-read.
+- **Why not compress:** any startup-injected enumeration grows with memory volume; compression only delays the cap and erodes the index's usefulness. The problem is *injection*, not *format*.
+- **Resolution:** retrieve at query time instead. A skill's description (constant size) is the always-on cost; grep returns only the relevant slice. Nothing scaling with memory volume enters context. This is the same router/content separation the superpowers plugin uses to scale across many skills.
+- **Symmetry gained:** read and write are now both skills (`/recall` + `/memorize`), one paradigm instead of two.
+- **Install simplified:** no hook to wire, so the current version never writes to `settings.json` (it only strips the legacy entry on upgrade).
+- **Cost accepted:** loss of unconditional passive awareness at session start; cross-cwd recall now depends on the model noticing relevance or the user cueing it. Judged acceptable because the hook's passive awareness was already broken by truncation, and the current cwd's memory is still natively auto-loaded.
+
+## 11. Future Extensions (Not Implemented)
+
+### 11.1 Lesson Graduation
 
 Port muse-crystal-seed's lesson state machine into the user's global `Applied Learning` log:
 
 - `active` — entry currently in effect, monitored for violations per session
-- `graduated` — 7 consecutive sessions without violation; entry archived (still searchable, no longer reminded)
-- `chronic` — entry has been re-added 3+ times after promotion; flagged for structural fix (hook, gate, automation) rather than another reminder
+- `graduated` — N consecutive sessions without violation; entry archived (still searchable, no longer reminded)
+- `chronic` — entry has been re-added repeatedly after promotion; flagged for structural fix (hook, gate, automation) rather than another reminder
 
-Defer until `Applied Learning` accumulates ≥ 5 entries (currently 1). Premature implementation would impose state machine overhead on a single rule.
+Defer until `Applied Learning` accumulates enough entries to justify the state-machine overhead.
 
-### 10.2 Active prefetch
+### 11.2 Active prefetch
 
 A `UserPromptSubmit` hook that searches all `~/.claude/projects/*/memory/` for keyword matches with each user message, injecting relevant entries proactively (à la OpenClaw `active-memory`).
 
-Defer until the SessionStart cross-cwd index is observed for ≥ 2 weeks. If users still ask "did we work on X before?" after the index ships proactively, active prefetch closes the gap. If the index is sufficient, active prefetch is wasted token spend.
+Defer until `/recall` is observed to be insufficient in practice. If the model still misses cross-cwd recall when not explicitly cued, active prefetch closes the gap. Note the 10,000-char output cap applies to `UserPromptSubmit` too, so any such hook must inject only a small relevant slice (retrieve-don't-inject), never an enumeration.
 
-### 10.3 Promotion sweep
+### 11.3 Promotion sweep
 
 A periodic background job (cron or on-demand) that reviews recent daily logs and promotes content into `MEMORY.md` based on access frequency, à la OpenClaw `dreaming sweep` and `memory promote`.
 
 Defer until daily logs exist; the user does not currently maintain `memory/YYYY-MM-DD.md` files. If short-term memory becomes a need, the daily-log + promote pipeline is the first step before any sweep.
 
-## 11. References
+## 12. References
 
 ### Anthropic primary sources
+- [Claude Code hooks documentation](https://code.claude.com/docs/en/hooks) — establishes the 10,000-char hook output cap (§ 3.2, § 10)
+- [Claude Code skills documentation](https://code.claude.com/docs/en/skills) — skill description budget, `maxSkillDescriptionChars`, overflow behaviour (§ 7)
 - [Memory tool documentation](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool)
 - [Context management announcement (2025-09-29)](https://claude.com/blog/context-management)
 - [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
