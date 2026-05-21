@@ -4,7 +4,7 @@ This file is the source of truth for AI agent behavior in this repo. When rules 
 
 ## Architecture
 
-Two complementary skills that augment Claude Code's prompt-driven auto-memory. Both are standalone (not plugin-bundled) so the slash names stay short, and both are model-invocable:
+Two complementary skills that augment Claude Code's prompt-driven auto-memory. The primary install is standalone (symlinked into `~/.claude/skills/`) so the slash names stay short (`/recall`, `/memorize`); the same skills are also packaged as the `mem` plugin for marketplace distribution (namespaced `/mem:recall`, `/mem:memorize`) — see *Distribution*. Both are model-invocable:
 
 - **Read** — `/recall` skill (`skills/recall/SKILL.md`) greps `~/.claude/projects/*/memory/` on demand and reads the relevant entries. Cross-cwd recall is retrieval-at-query-time, not an index injected at startup — so it scales without limit as memory grows.
 - **Write** — `/memorize` skill (`skills/memorize/SKILL.md`) audits the current session against the four memory categories and persists entries.
@@ -17,6 +17,16 @@ No hook, no `settings.json` patch. The earlier `SessionStart` index hook was ret
 - Preview: `./setup.sh --dry-run` (note: verify phase reports against real state, so freshly-planned links show as not-yet-applied under dry-run)
 - Force replace mismatched dirs at `~/.claude/skills/`: `./setup.sh --force`
 - Verify any time: re-run `./setup.sh`
+
+## Distribution
+
+Three coexisting install paths, all serving the **same** `skills/` tree:
+
+- **`setup.sh` (standalone, primary)** — symlinks `skills/<name>/` into `~/.claude/skills/`. Yields the shortest names (`/recall`, `/memorize`) and deploys plain skill dirs a non-Claude harness can also read. Kept as primary for exactly these two reasons.
+- **Self-hosted marketplace** — `.claude-plugin/marketplace.json` (`source: "./"`) makes this repo a single-plugin marketplace: `claude plugin marketplace add howar31/claude-memory` → `install mem@claude-memory`.
+- **Central marketplace** — an entry in `howar31/howar31-marketplace` referencing this repo: `install mem@howar31`.
+
+Plugin manifests: `.claude-plugin/plugin.json` (`name: mem` → the namespace; skills auto-discovered from `skills/`, no declaration needed) and `.claude-plugin/marketplace.json`. Plugin-managed skills are always namespaced, so the marketplace paths give `/mem:recall` / `/mem:memorize`. `mem` is only the plugin/skill handle; the project is `claude-memory`. `setup.sh` and the skill bodies are untouched by plugin packaging (it iterates a fixed `SKILL_DIRS` array and ignores `.claude-plugin/`). Modeled on the sibling `magi` plugin's dual-marketplace pattern. Bump `plugin.json` `version` on each plugin release. Full rationale: [SPEC.md](SPEC.md) § 4.2, § 10.2.
 
 ## Code Style
 

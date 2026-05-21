@@ -1,0 +1,12 @@
+{
+  "name": "claude-memory",
+  "owner": { "name": "Howar31", "url": "https://github.com/howar31" },
+  "metadata": { "description": "Self-hosted single-plugin marketplace for claude-memory" },
+  "plugins": [
+    {
+      "name": "mem",
+      "source": "./",
+      "description": "Cross-cwd memory recall + write skills (/mem:recall, /mem:memorize)"
+    }
+  ]
+}

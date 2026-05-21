@@ -1,0 +1,10 @@
+{
+  "name": "mem",
+  "version": "0.1.0",
+  "description": "Cross-cwd memory recall + write skills for Claude Code's prompt-based auto-memory",
+  "author": { "name": "howar31", "url": "https://github.com/howar31" },
+  "homepage": "https://github.com/howar31/claude-memory",
+  "repository": "https://github.com/howar31/claude-memory.git",
+  "license": "MIT",
+  "keywords": ["claude-code", "claude-code-plugin", "memory", "recall", "skills", "productivity"]
+}
