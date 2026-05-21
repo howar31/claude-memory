@@ -43,6 +43,7 @@ Plugin manifests: `.claude-plugin/plugin.json` (`name: mem` → the namespace; s
 
 Both skills (`skills/<name>/SKILL.md`):
 - Frontmatter requires `name` (must match dir name) and `description` (drives both listing and model-invocation decision); the `description` enumerates concrete trigger phrases (zh + en) so auto-invocation fires reliably
+- Descriptions are deliberately tuned for **high auto-invocation frequency** (proactive self-invoke language + many trigger phrases), relying on `/memorize`'s internal dedup rather than trigger restraint to keep the store clean — i.e. decouple invocation frequency from write frequency. Do not trim them back toward terse triggering; both stay well under the 1,536-char cap. See SPEC.md § 4.2
 - Body is numbered steps, English, terse
 - `$ARGUMENTS` parsing documented near the top
 - Destructive default actions must offer an opt-in confirmation flag (e.g. `/memorize dry`); `/recall` is read-only

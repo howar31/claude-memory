@@ -116,6 +116,8 @@ Claude Code plugins force their skills to be namespaced as `/plugin-name:skill-n
 
 Neither skill's frontmatter sets `disable-model-invocation: true`, so Claude can self-trigger them. The `description` field of each enumerates concrete trigger phrases (Traditional Chinese + English) so the model's auto-decision fires reliably — auto-invocation is judgment-based (the model reads the description each turn), not event-deterministic like a hook, so the description is the only lever for trigger quality.
 
+Both descriptions are tuned for **high auto-invocation frequency** rather than minimal triggering: they use proactive self-invoke language and enumerate many trigger phrases so the model errs toward calling them. The enabling principle is to **decouple invocation frequency from write frequency** — `/memorize` audits often, but its dedup step (read existing entries, update-over-create) and the legitimacy of an empty audit mean frequent auditing raises recall quality without cluttering the store; `/recall` is read-only and cheap, so "when in doubt, recall." A future agent should not "simplify" these descriptions back toward terse triggering — the verbosity is deliberate, and both remain well under the 1,536-char listing cap (recall ≈1.1k, memorize ≈1.1k chars). This reflects a durable user preference for maximal memory-interaction frequency.
+
 ### 4.3 Trade-offs not made
 
 The following adjacent ideas were considered and deferred:
