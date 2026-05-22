@@ -67,6 +67,7 @@ All docs in English. Code comments in English. The user's conversation language 
 - One commit per logical change
 - Never commit automatically — present a summary and wait for explicit user approval
 - Never push without approval
+- Version-bump prompt: on every commit, ask whether to bump `plugin.json` `version` and recommend a level (patch / minor / major, or no bump) with rationale. Both marketplaces track HEAD without pinning, so the bump is a semver signal, not an install requirement — see *Distribution*
 
 ## Logs / State
 
