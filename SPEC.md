@@ -323,6 +323,10 @@ The skills gained a second distribution path: the `mem` Claude Code plugin, publ
 - **Proposal-first:** tidying without fixed rules tends to apply changes before confirmation, treat closed entries as delete-or-keep with no middle option, move infrastructure entries into a repo, and leave no pointer in the entry index. The skill makes the proposal a hard stop and states the placement test.
 - **Cost accepted:** relocated entries no longer auto-load in parent-folder sessions; the pointer line and `/recall` cover that gap, at the price of one extra read when the topic comes up.
 
+### 10.4 No `npx skills` channel (2026-10-16)
+
+The cross-agent `npx skills` CLI would discover `skills/<name>/SKILL.md` in this repo, but all three skills operate on Claude Code's own memory store (`~/.claude/projects/*/memory/`, the auto-loaded `MEMORY.md` and its load limit). Installed into another agent they have nothing to act on, so distribution stays `setup.sh` + the `mem` plugin. Revisit only if another agent adopts the same memory layout.
+
 ## 11. Future Extensions (Not Implemented)
 
 ### 11.1 Lesson Graduation
