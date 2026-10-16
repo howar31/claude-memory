@@ -140,7 +140,7 @@ claude plugin marketplace add howar31/claude-memory
 claude plugin install mem@claude-memory
 ```
 
-**Central marketplace** (all of howar31's plugins; register once, future plugins appear automatically):
+**Central marketplace** (all of howar31's plugins; register once, then install any of them by name):
 
 ```bash
 claude plugin marketplace add howar31/howar31-marketplace
