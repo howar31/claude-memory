@@ -20,6 +20,12 @@ The auto-memory rules in the global `~/.claude/CLAUDE.md` instruct Claude to sav
 
 The `/memorize` skill closes this gap. It is a slash command (and model-invocable) that audits the current session against the four memory categories explicitly and persists matching entries.
 
+### 1.3 Index growth and misplacement (maintenance)
+
+Only the first 200 lines or 25KB of a cwd's `MEMORY.md` load at session start; the rest is dropped without notice (<https://code.claude.com/docs/en/memory>). Writes accumulate, closed items keep their index lines, and when sessions are usually opened in a parent folder that holds several repos, entries about one repo's code collect in the parent's memory, where a session opened inside that repo never sees them.
+
+The `/tidy` skill addresses this: it measures the index, repairs links, and moves each entry out of the index only by archiving, grouping or relocating it. No content is deleted.
+
 ## 2. Alternatives Considered
 
 Before settling on a filesystem-native approach, the author surveyed several memory-system architectures. The matrix below is the relevant excerpt; full notes from the survey are kept in the user's session transcripts.
@@ -110,15 +116,34 @@ The skill instruction file walks Claude through a six-step audit:
 
 **Why standalone *and* plugin (dual distribution):**
 
-Claude Code plugins force their skills to be namespaced as `/plugin-name:skill-name`. To keep the short slash names `/recall` and `/memorize`, the **primary** install is the standalone path `~/.claude/skills/<name>/` — `setup.sh` symlinks the skills there from this repo so the source-of-truth stays in version control, and a non-Claude harness that reads `skills/<name>/SKILL.md` directly can consume them too. The same skills are *also* published as the `mem` plugin (namespaced `/mem:recall`, `/mem:memorize`) for discoverable, managed install via marketplace; see § 10.2. All paths share one `skills/` tree.
+Claude Code plugins force their skills to be namespaced as `/plugin-name:skill-name`. To keep the short slash names `/recall`, `/memorize` and `/tidy`, the **primary** install is the standalone path `~/.claude/skills/<name>/` — `setup.sh` symlinks the skills there from this repo so the source-of-truth stays in version control, and a non-Claude harness that reads `skills/<name>/SKILL.md` directly can consume them too. The same skills are *also* published as the `mem` plugin (namespaced `/mem:recall`, `/mem:memorize`) for discoverable, managed install via marketplace; see § 10.2. All paths share one `skills/` tree.
 
-**Why model-invocation is enabled (both skills):**
+**Why model-invocation is enabled (all skills):**
 
-Neither skill's frontmatter sets `disable-model-invocation: true`, so Claude can self-trigger them. The `description` field of each enumerates concrete trigger phrases (Traditional Chinese + English) so the model's auto-decision fires reliably — auto-invocation is judgment-based (the model reads the description each turn), not event-deterministic like a hook, so the description is the only lever for trigger quality.
+No skill's frontmatter sets `disable-model-invocation: true`, so Claude can self-trigger them. The `description` field of each enumerates concrete trigger phrases (Traditional Chinese + English) so the model's auto-decision fires reliably — auto-invocation is judgment-based (the model reads the description each turn), not event-deterministic like a hook, so the description is the only lever for trigger quality.
 
-Both descriptions are tuned for **high auto-invocation frequency** rather than minimal triggering: they use proactive self-invoke language and enumerate many trigger phrases so the model errs toward calling them. The enabling principle is to **decouple invocation frequency from write frequency** — `/memorize` audits often, but its dedup step (read existing entries, update-over-create) and the legitimacy of an empty audit mean frequent auditing raises recall quality without cluttering the store; `/recall` is read-only and cheap, so "when in doubt, recall." A future agent should not "simplify" these descriptions back toward terse triggering — the verbosity is deliberate, and both remain well under the 1,536-char listing cap (recall ≈1.1k, memorize ≈1.1k chars). This reflects a durable user preference for maximal memory-interaction frequency.
+The `/recall` and `/memorize` descriptions are tuned for **high auto-invocation frequency** rather than minimal triggering: they use proactive self-invoke language and enumerate many trigger phrases so the model errs toward calling them. The enabling principle is to **decouple invocation frequency from write frequency** — `/memorize` audits often, but its dedup step (read existing entries, update-over-create) and the legitimacy of an empty audit mean frequent auditing raises recall quality without cluttering the store; `/recall` is read-only and cheap, so "when in doubt, recall." A future agent should not "simplify" these descriptions back toward terse triggering — the verbosity is deliberate, and both remain well under the 1,536-char listing cap (recall ≈1.1k, memorize ≈1.1k chars). This reflects a durable user preference for maximal memory-interaction frequency.
 
-### 4.3 Trade-offs not made
+`/tidy` is triggered by need rather than by frequency: its description names the conditions (index near its limit, Claude Code's near-limit warning, stale or misplaced entries) and asks the model to offer it past about 60% of either limit. Because every run stops at a proposal, a needless trigger costs only a read.
+
+### 4.3 Maintain — `/tidy` skill
+
+**Skill:** `skills/tidy/SKILL.md`
+**Trigger:** user invocation (`/tidy`, `/tidy <focus>`, `/tidy check`) OR model self-invocation (index near its limit, Claude Code's near-limit warning, stale or misplaced entries)
+
+1. **Locate** the entry dir (the auto-loaded `MEMORY.md`), its child dirs (`<entry-folder>-*`, confirmed by transcript `cwd` when ambiguous) and git repos under the cwd that have no memory dir yet.
+2. **Measure and check** each dir: line and byte count against the load limit, long index lines, dangling links, unindexed entries (not in the index, not under an indexed hub, not archived).
+3. **Classify** every entry as keep / shorten / archive / group / move / fix / ask.
+4. **Propose** the before-and-after size and per-action tables, then wait for approval. `check` mode stops after Step 2.
+5. **Apply**: back up the touched dirs under `$TMPDIR`; add `archived: YYYY-MM-DD` to archived entries; write hub entries; move files and rewrite relative markdown links on both sides; rebuild the entry index in sections plus a `## Repo memories` pointer per child dir; diff each `MEMORY.md` against the Step 2 copy right before writing, so lines added by concurrent sessions survive.
+6. **Verify** by re-running the Step 2 checks.
+7. **Report** before/after numbers, counts, backup path, open questions.
+
+**Placement rule.** An entry moves to a repo only when a session opened inside that repo would need it to change the repo's code. Infrastructure and operations entries stay in the entry dir even when they name one repo's service; user and feedback entries never move.
+
+**Why it is not compression.** The read-path decision (§ 10.1) rejected shrinking an injected index because shrinking erodes meaning. `/tidy` removes nothing: archived entries keep their files and stay reachable through `/recall`; hubs keep one line per member; moved entries load natively in the repo's own sessions, and the entry index keeps a pointer with topic keywords so a parent-folder session knows which index to read.
+
+### 4.4 Trade-offs not made
 
 The following adjacent ideas were considered and deferred:
 
@@ -143,18 +168,21 @@ claude-memory/
 └── skills/
     ├── recall/
     │   └── SKILL.md                     /recall slash command (read)
-    └── memorize/
-        └── SKILL.md                     /memorize slash command (write)
+    ├── memorize/
+    │   └── SKILL.md                     /memorize slash command (write)
+    └── tidy/
+        └── SKILL.md                     /tidy slash command (maintain)
 ```
 
 After install, the deployed surface is:
 
 ```
 ~/.claude/skills/
-  recall                        -> /path/to/claude-memory/skills/recall
-  memorize                      -> /path/to/claude-memory/skills/memorize
+  recall                        -> <repo>/skills/recall
+  memorize                      -> <repo>/skills/memorize
+  tidy                          -> <repo>/skills/tidy
 
-~/.claude/system/memory         -> /path/to/claude-memory   (operational pointer)
+~/.claude/system/memory         -> <repo>   (operational pointer)
 ```
 
 No hook is installed; `settings.json` is not modified by the current version (the installer only *removes* a legacy hook entry if one is present — see § 8). The repo is the single source of truth. Skill dirs at `~/.claude/skills/` are symlinks back into the repo, so editing through either path stages the same file. The repo's location is portable (`SCRIPT_DIR=$(cd $(dirname $0) && pwd)` resolves at runtime).
@@ -184,7 +212,7 @@ Creates `~/.claude/system/memory` → repo path. Idempotent: skip if symlink alr
 
 ### 6.4 Phase 2 — install skill directories
 
-For each entry in `SKILL_DIRS` (`recall`, `memorize`):
+For each entry in `SKILL_DIRS` (`memorize`, `recall`, `tidy`):
 
 | State at `~/.claude/skills/<dir>` | Action |
 |---|---|
@@ -221,7 +249,7 @@ Every skill in this repo follows this layout:
 **Frontmatter (YAML)**
 - `name` — must match the directory name; `setup.sh` verify enforces this
 - `description` — used for the slash-command listing AND model-invocation decision; must enumerate concrete trigger phrases (zh + en) when model-invocation is enabled, since auto-invocation is judgment-based and the description is the only lever. Combined `description` text is capped at 1,536 chars in the listing (configurable via `maxSkillDescriptionChars`)
-- `disable-model-invocation: true` — set only when a skill should be exclusively user-invocable (neither current skill sets it)
+- `disable-model-invocation: true` — set only when a skill should be exclusively user-invocable (no current skill sets it)
 
 **Body conventions**
 - English instructions (per the user's `Doc Language` rule)
@@ -286,6 +314,14 @@ The skills gained a second distribution path: the `mem` Claude Code plugin, publ
 - **Why nearly free:** the repo's `skills/<name>/SKILL.md` layout already matches plugin auto-discovery, and both skills are self-contained (no dependency on `setup.sh` or `~/.claude/system/memory`), so the same `skills/` tree serves all three paths. The only additions are two manifests (`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`) plus one entry in the central marketplace; `setup.sh` (fixed `SKILL_DIRS` array, ignores `.claude-plugin/`) and the skill bodies are untouched.
 - **`mem` name:** the plugin name — hence the namespace — is the short handle `mem`; the project itself remains `claude-memory`. The self-hosted marketplace is named `claude-memory`, so the install id is `mem@claude-memory`. Modeled on the sibling `magi` plugin in `magi-workflow`, which uses the identical dual-marketplace pattern (`plugin.json` + a `source: "./"` `marketplace.json`, plus a central listing).
 - **Cost accepted:** users who install both a standalone copy and the plugin get the skills under two names (`/recall` and `/mem:recall`); docs advise picking one. Plugin releases require a `version` bump in `plugin.json`. Full E2E of the central path can only be exercised after the repo is pushed to GitHub (the central entry references `howar31/claude-memory` via a `github` source).
+
+### 10.3 `/tidy` maintenance skill (2026-10-16)
+
+- **Trigger:** a parent-folder cwd that holds several repos approached the 25KB index limit, with closed incidents, per-person grants and repo-code entries all in one index.
+- **Decision:** a third skill rather than a mode of `/memorize`, keeping one function per mechanism: `/recall` reads, `/memorize` writes new entries, `/tidy` maintains the store.
+- **Archive over delete:** an `archived:` frontmatter field instead of deletion keeps history searchable and lets the unindexed-entry check tell intentional removals from omissions.
+- **Proposal-first:** tidying without fixed rules tends to apply changes before confirmation, treat closed entries as delete-or-keep with no middle option, move infrastructure entries into a repo, and leave no pointer in the entry index. The skill makes the proposal a hard stop and states the placement test.
+- **Cost accepted:** relocated entries no longer auto-load in parent-folder sessions; the pointer line and `/recall` cover that gap, at the price of one extra read when the topic comes up.
 
 ## 11. Future Extensions (Not Implemented)
 

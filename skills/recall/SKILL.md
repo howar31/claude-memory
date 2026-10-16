@@ -52,4 +52,5 @@ Lead with the conclusion, then the evidence. For each relevant memory: state the
 - Memories are point-in-time observations. Before asserting a memory's `file:line`, flag, or behavior claim as current fact, verify it against the live code.
 - Do not speculate about memory contents — always `Read` the source file when an entry looks relevant.
 - Include the current cwd in the search: its `MEMORY.md` index is in context, but its individual entry bodies may not be.
+- An entry whose frontmatter has `archived: YYYY-MM-DD` is closed history (removed from the index by `/tidy`). Cite it as past state, not as current.
 - This skill is read-only. To write memory, use `/memorize`.

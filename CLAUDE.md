@@ -4,10 +4,11 @@ This file is the source of truth for AI agent behavior in this repo. When rules 
 
 ## Architecture
 
-Two complementary skills that augment Claude Code's prompt-driven auto-memory. The primary install is standalone (symlinked into `~/.claude/skills/`) so the slash names stay short (`/recall`, `/memorize`); the same skills are also packaged as the `mem` plugin for marketplace distribution (namespaced `/mem:recall`, `/mem:memorize`) — see *Distribution*. Both are model-invocable:
+Three skills that augment Claude Code's prompt-driven auto-memory. The primary install is standalone (symlinked into `~/.claude/skills/`) so the slash names stay short (`/recall`, `/memorize`, `/tidy`); the same skills are also packaged as the `mem` plugin for marketplace distribution (namespaced `/mem:recall`, `/mem:memorize`, `/mem:tidy`) — see *Distribution*. All are model-invocable:
 
 - **Read** — `/recall` skill (`skills/recall/SKILL.md`) greps `~/.claude/projects/*/memory/` on demand and reads the relevant entries. Cross-cwd recall is retrieval-at-query-time, not an index injected at startup — so it scales without limit as memory grows.
 - **Write** — `/memorize` skill (`skills/memorize/SKILL.md`) audits the current session against the four memory categories and persists entries.
+- **Maintain** — `/tidy` skill (`skills/tidy/SKILL.md`) keeps a cwd's `MEMORY.md` under its auto-load limit (200 lines / 25KB): archives closed entries, groups standing records under hub entries, moves repo-code entries to the repo's memory dir with a pointer line left behind. Proposal-first; never deletes files. Test fixtures for it must be synthetic, never copies of real memory.
 
 No hook, no `settings.json` patch. The earlier `SessionStart` index hook was retired because hook output is capped at 10,000 chars (stdout / `additionalContext` / `systemMessage` alike); a growing index silently collapsed to a 2 KB preview + spill file. See [SPEC.md](SPEC.md) for the full design, decision log, and alternatives considered.
 
@@ -41,12 +42,13 @@ Plugin manifests: `.claude-plugin/plugin.json` (`name: mem` → the namespace; s
 
 ## Skill Contract
 
-Both skills (`skills/<name>/SKILL.md`):
+All skills (`skills/<name>/SKILL.md`):
 - Frontmatter requires `name` (must match dir name) and `description` (drives both listing and model-invocation decision); the `description` enumerates concrete trigger phrases (zh + en) so auto-invocation fires reliably
 - Descriptions are deliberately tuned for **high auto-invocation frequency** (proactive self-invoke language + many trigger phrases), relying on `/memorize`'s internal dedup rather than trigger restraint to keep the store clean — i.e. decouple invocation frequency from write frequency. Do not trim them back toward terse triggering; both stay well under the 1,536-char cap. See SPEC.md § 4.2
 - Body is numbered steps, English, terse
 - `$ARGUMENTS` parsing documented near the top
-- Destructive default actions must offer an opt-in confirmation flag (e.g. `/memorize dry`); `/recall` is read-only
+- Destructive default actions must offer an opt-in confirmation flag (e.g. `/memorize dry`); `/recall` is read-only; `/tidy` always proposes first and offers `check` as a read-only mode
+- Public repo: skill text and examples must stay generic. No personal paths, employer or project names, people, hostnames or account identifiers
 
 ## Doc Set
 

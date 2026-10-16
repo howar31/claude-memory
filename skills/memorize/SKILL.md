@@ -77,6 +77,10 @@ Append one pointer line per new entry to `MEMORY.md` in the same directory:
 
 Keep each line under ~150 characters. Do not duplicate existing pointers. `MEMORY.md` itself has no frontmatter and is index-only.
 
+If an entry listed in `MEMORY.md` is a hub that groups this kind of record (its body lists member entries), add the pointer line to that hub instead of `MEMORY.md`.
+
+If `MEMORY.md` is past about 60% of its auto-load limit (200 lines or 25KB), mention `/tidy` in the Step 6 report.
+
 ## Step 6 — Report
 
 Print a short summary: filenames written, filenames updated, and confirmation that `MEMORY.md` index is in sync. If nothing was memory-worthy, say so explicitly — an empty audit is a valid result.

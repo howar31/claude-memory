@@ -2,8 +2,8 @@
 # claude-memory setup — idempotent installer for the memory skills.
 #
 # Symlinks repo skill directories into ~/.claude/skills/ and creates
-# ~/.claude/system/memory. Cross-cwd recall and memory writes are both skills
-# (/recall, /memorize) — there is no hook and no settings.json patch.
+# ~/.claude/system/memory. Cross-cwd recall, memory writes and memory upkeep are
+# all skills (/recall, /memorize, /tidy) — there is no hook and no settings.json patch.
 #
 # Also migrates away from the legacy SessionStart hook (memory-aggregate.sh):
 # removes its symlink and its settings.json entry if a previous install left
@@ -19,7 +19,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SKILL_DIRS=("memorize" "recall")
+SKILL_DIRS=("memorize" "recall" "tidy")
 CLAUDE_HOOKS_DIR="$HOME/.claude/hooks"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
 SETTINGS="$HOME/.claude/settings.json"
@@ -220,8 +220,9 @@ fi
 header "Summary"
 if [ "$fail" -eq 0 ]; then
   printf '  %sAll checks passed.%s Memory skills installed.\n\n' "$C_OK" "$C_RST"
-  printf '  /recall   — search memory across all project cwds (read)\n'
-  printf '  /memorize — audit this session and persist entries (write)\n\n'
+  printf '  /recall   : search memory across all project cwds (read)\n'
+  printf '  /memorize : audit this session and persist entries (write)\n'
+  printf '  /tidy     : keep MEMORY.md under its load limit; archive, group, relocate (maintain)\n\n'
   printf '  Skills are picked up dynamically; run /reload-plugins in an active session if needed.\n'
   exit 0
 else
