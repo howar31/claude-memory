@@ -121,6 +121,8 @@ cd claude-memory && ./setup.sh
 ./setup.sh --force   # 取代 ~/.claude/skills/ 下不符的目錄
 ```
 
+更新時在 clone 目錄執行 `git pull` 即可：已安裝的 skill 是 symlink，Claude Code 會直接讀到新檔案。只有新版本加入新的 skill 目錄，或 symlink 不見時，才需要重新執行 `setup.sh`。
+
 ### 4. 開始使用
 
 Skill 會動態載入；如果 `/recall`、`/memorize`、`/tidy` 沒有馬上出現，在進行中的 session 執行 `/reload-plugins`。不需要重新啟動（沒有 hook 要載入）。
@@ -150,7 +152,7 @@ claude plugin install mem@howar31
 | | `setup.sh`（symlink） | plugin（`mem`） |
 |---|---|---|
 | 指令名稱 | `/recall`、`/memorize`、`/tidy`（最短） | `/mem:recall`、`/mem:memorize`、`/mem:tidy` |
-| 安裝／更新 | clone 後重新執行 `setup.sh` | `claude plugin install` / `update` |
+| 安裝／更新 | clone 後執行 `setup.sh`；更新用 `git pull` | `claude plugin install` / `update` |
 | 可在 marketplace 找到 | 否 | 是 |
 | 非 Claude 的 harness | 可用（一般 skill 目錄） | 取決於該 harness 是否支援 plugin |
 

@@ -121,6 +121,8 @@ If a step is unsafe to do automatically (an existing real directory at a skill p
 ./setup.sh --force   # replace mismatched directories at ~/.claude/skills/
 ```
 
+To update, run `git pull` in the clone: the installed skills are symlinks, so Claude Code reads the new files directly. Re-run `setup.sh` only when a release adds a skill directory or a link is missing.
+
 ### 4. Use it
 
 Skills are picked up dynamically; run `/reload-plugins` in an active session if `/recall`, `/memorize` and `/tidy` do not appear immediately. No restart is required (there is no hook to load).
@@ -150,7 +152,7 @@ claude plugin install mem@howar31
 | | `setup.sh` (symlink) | plugin (`mem`) |
 |---|---|---|
 | Slash names | `/recall`, `/memorize`, `/tidy` (shortest) | `/mem:recall`, `/mem:memorize`, `/mem:tidy` |
-| Install / update | clone + re-run `setup.sh` | `claude plugin install` / `update` |
+| Install / update | clone + `setup.sh`; update with `git pull` | `claude plugin install` / `update` |
 | Discoverable | no | yes (via marketplace) |
 | Non-Claude harnesses | works (plain skill dirs) | depends on the harness's plugin support |
 
