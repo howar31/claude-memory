@@ -11,18 +11,18 @@
 
 [English](README.md) | 正體中文
 
-給 [Claude Code](https://claude.com/claude-code) 內建 auto-memory 用的三個 skill：**讀取**用的 skill 跨專案目錄查詢記憶，**寫入**用的 skill 依需求稽核當前對話，**維護**用的 skill 讓每個目錄的記憶 index 維持在自動載入上限內。三者都直接操作既有的 `~/.claude/projects/<encoded-cwd>/memory/` 檔案，不需要 vector database、MCP server 或任何外部服務。
+給 [Claude Code](https://claude.com/claude-code) 內建 auto-memory 用的三個 skill：**讀取**用的 skill 跨專案查詢記憶，**寫入**用的 skill 依需求稽核當前對話，**維護**用的 skill 讓每個專案的記憶 index 維持在自動載入上限內。三者都直接操作既有的 `~/.claude/projects/<project>/memory/` 檔案，不需要 vector database、MCP server 或任何外部服務。
 
 ## 功能
 
 ### 讀取：`/recall` skill
 
-Claude Code 的 auto-memory 以 cwd 區分。在某個專案目錄工作時寫下的記憶，只存在該 cwd 的記憶資料夾，從同層或上層的 cwd 看不到，即使主題相同也一樣。Claude Code 啟動時只會自動載入**目前** cwd 的 `MEMORY.md`。
+Claude Code 的 auto-memory 以專案區分：每個 git repo 一個記憶資料夾，repo 內所有子目錄和 worktree 共用；不在 git repo 裡時，每個專案目錄一個。在某個 repo 寫下的記憶，從其他 repo、或從包含多個 repo 的上層資料夾都看不到，即使主題相同也一樣。Claude Code 啟動時只會自動載入**目前**專案的 `MEMORY.md`。
 
-`/recall` 在需要時補上這一塊：它對每個 `~/.claude/projects/*/memory/` grep 主題、讀取相關記憶，並根據內容回答，同時註明每筆記憶來自哪個專案。
+`/recall` 在需要時補上這一塊：它對每個 `~/.claude/projects/*/memory/`（以及 subagent 記憶、設定中找到的 `autoMemoryDirectory`）grep 主題、讀取相關記憶，並根據內容回答，同時註明每筆記憶來自哪個專案。
 
 ```text
-/recall <主題>      → 在所有 cwd 的記憶中搜尋主題並回報
+/recall <主題>      → 在所有專案的記憶中搜尋主題並回報
 /recall             → 從對話推斷主題（不明確時先詢問）
 ```
 
@@ -45,7 +45,7 @@ Claude Code 的 auto-memory 寫入由提示驅動：模型在對話中自行判�
 
 ### 維護：`/tidy` skill
 
-Claude Code 在 session 開始時只載入目錄 `MEMORY.md` 的前 200 行或前 25KB，超過的部分會直接被捨棄，不會有任何提示。另外，如果 session 通常開在包含多個 repo 的上層資料夾，記憶會集中累積在那裡，而在其中某個 repo 裡開的 session 看不到這些記憶。
+Claude Code 在 session 開始時只載入專案 `MEMORY.md` 的前 200 行或前 25KB，超過的部分會直接被捨棄，不會有任何提示。另外，如果 session 通常開在包含多個 repo 的上層資料夾，記憶會集中累積在那裡，而在其中某個 repo 裡開的 session 看不到這些記憶。
 
 `/tidy` 會量測 index 大小、檢查失效連結和沒有列在 index 的記憶，並對每筆記憶提出一個處理方式：
 
@@ -160,11 +160,11 @@ claude plugin install mem@howar31
 
 ## 使用情境
 
-當你提到其他專案的過往工作（「我們在另一個 repo 怎麼解決 X 的？」「找一下我對 Y 的偏好」），Claude 會呼叫 `/recall`，grep 每個 cwd 的記憶，根據符合的內容回答並註明來源專案。你也可以直接執行 `/recall <主題>`。
+當你提到其他專案的過往工作（「我們在另一個 repo 怎麼解決 X 的？」「找一下我對 Y 的偏好」），Claude 會呼叫 `/recall`，grep 每個專案的記憶，根據符合的內容回答並註明來源專案。你也可以直接執行 `/recall <主題>`。
 
-想把 session 內容留給以後時，執行 `/memorize`（或用 `/memorize dry` 先看提案）。記憶會寫進目前 cwd 的 `~/.claude/projects/<encoded-cwd>/memory/`，目前 session 的自動載入和之後的 `/recall` 搜尋都會用到。
+想把 session 內容留給以後時，執行 `/memorize`（或用 `/memorize dry` 先看提案）。記憶會寫進 Claude Code 為目前專案使用的記憶資料夾（預設是 `~/.claude/projects/<project>/memory/`，`<project>` 是 repo 路徑把非英數字元換成 `-`），目前 session 的自動載入和之後的 `/recall` 搜尋都會用到。
 
-當某個目錄的 `MEMORY.md` 超過載入上限的約 60%，或 Claude Code 提示已接近上限時，執行 `/tidy`（或用 `/tidy check` 取得唯讀報告）。
+當某個專案的 `MEMORY.md` 超過載入上限的約 60%，或 Claude Code 提示已接近上限時，執行 `/tidy`（或用 `/tidy check` 取得唯讀報告）。
 
 ## 備份
 

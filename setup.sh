@@ -2,7 +2,7 @@
 # claude-memory setup — idempotent installer for the memory skills.
 #
 # Symlinks repo skill directories into ~/.claude/skills/ and creates
-# ~/.claude/system/memory. Cross-cwd recall, memory writes and memory upkeep are
+# ~/.claude/system/memory. Cross-project recall, memory writes and memory upkeep are
 # all skills (/recall, /memorize, /tidy) — there is no hook and no settings.json patch.
 #
 # Also migrates away from the legacy SessionStart hook (memory-aggregate.sh):
@@ -70,7 +70,7 @@ for cmd in grep jq bash; do
   if command -v "$cmd" >/dev/null 2>&1; then ok "$cmd"; else err "$cmd missing"; missing=1; fi
 done
 [ "$missing" -eq 1 ] && { err "Install missing dependencies and re-run"; exit 1; }
-note "grep powers /recall search; jq resolves cwd labels and migrates legacy settings"
+note "grep powers /recall search; jq reads autoMemoryDirectory and migrates legacy settings"
 
 # --- Phase 0: migrate away from the legacy SessionStart hook ---
 header "Phase 0 — migrate legacy hook"
@@ -220,7 +220,7 @@ fi
 header "Summary"
 if [ "$fail" -eq 0 ]; then
   printf '  %sAll checks passed.%s Memory skills installed.\n\n' "$C_OK" "$C_RST"
-  printf '  /recall   : search memory across all project cwds (read)\n'
+  printf '  /recall   : search memory across all projects (read)\n'
   printf '  /memorize : audit this session and persist entries (write)\n'
   printf '  /tidy     : keep MEMORY.md under its load limit; archive, group, relocate (maintain)\n\n'
   printf '  Skills are picked up dynamically; run /reload-plugins in an active session if needed.\n'

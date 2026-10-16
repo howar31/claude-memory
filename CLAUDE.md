@@ -6,9 +6,9 @@ This file is the source of truth for AI agent behavior in this repo. When rules 
 
 Three skills that augment Claude Code's prompt-driven auto-memory. The primary install is standalone (symlinked into `~/.claude/skills/`) so the slash names stay short (`/recall`, `/memorize`, `/tidy`); the same skills are also packaged as the `mem` plugin for marketplace distribution (namespaced `/mem:recall`, `/mem:memorize`, `/mem:tidy`) — see *Distribution*. All are model-invocable:
 
-- **Read** — `/recall` skill (`skills/recall/SKILL.md`) greps `~/.claude/projects/*/memory/` on demand and reads the relevant entries. Cross-cwd recall is retrieval-at-query-time, not an index injected at startup — so it scales without limit as memory grows.
+- **Read** — `/recall` skill (`skills/recall/SKILL.md`) greps `~/.claude/projects/*/memory/` (plus subagent memory and any `autoMemoryDirectory`) on demand and reads the relevant entries. Claude Code keeps one memory dir per git repo (subdirectories and worktrees share it) or per project dir outside a repo; cross-project recall is retrieval-at-query-time, not an index injected at startup — so it scales without limit as memory grows.
 - **Write** — `/memorize` skill (`skills/memorize/SKILL.md`) audits the current session against the four memory categories and persists entries.
-- **Maintain** — `/tidy` skill (`skills/tidy/SKILL.md`) keeps a cwd's `MEMORY.md` under its auto-load limit (200 lines / 25KB): archives closed entries, groups standing records under hub entries, moves repo-code entries to the repo's memory dir with a pointer line left behind. Proposal-first; never deletes files. Test fixtures for it must be synthetic, never copies of real memory.
+- **Maintain** — `/tidy` skill (`skills/tidy/SKILL.md`) keeps a project's `MEMORY.md` under its auto-load limit (200 lines / 25KB): archives closed entries, groups standing records under hub entries, moves repo-code entries to the repo's memory dir with a pointer line left behind. Proposal-first; never deletes files. Test fixtures for it must be synthetic, never copies of real memory.
 
 No hook, no `settings.json` patch. The earlier `SessionStart` index hook was retired because hook output is capped at 10,000 chars (stdout / `additionalContext` / `systemMessage` alike); a growing index silently collapsed to a 2 KB preview + spill file. See [SPEC.md](SPEC.md) for the full design, decision log, and alternatives considered.
 
@@ -47,7 +47,8 @@ All skills (`skills/<name>/SKILL.md`):
 - Descriptions are deliberately tuned for **high auto-invocation frequency** (proactive self-invoke language + many trigger phrases), relying on `/memorize`'s internal dedup rather than trigger restraint to keep the store clean — i.e. decouple invocation frequency from write frequency. Do not trim them back toward terse triggering; both stay well under the 1,536-char cap. See SPEC.md § 4.2
 - Body is numbered steps, English, terse
 - `$ARGUMENTS` parsing documented near the top
-- No positional parameters (`$0`, `$1`, …) anywhere in a SKILL.md, including shell snippets: Claude Code substitutes them with the skill's arguments when it loads the skill, so `awk '{print $0}'` or a shell function's `"$1"` silently change meaning. Use named variables and `awk`'s bare `length`
+- No positional parameters (`$0`, `$1`, …) anywhere in a SKILL.md, including shell snippets: Claude Code substitutes them with the skill's arguments when it loads the skill, so `awk '{print $0}'` or a shell function's `"$1"` silently change meaning. Use named variables and `awk`'s bare `length`. Likewise never write a shell variable as `${CLAUDE_...}` (Claude Code substitutes that form too); use `$CLAUDE_CONFIG_DIR` without braces
+- Memory paths and formats follow the current Claude Code docs (memory, sessions, sub-agents pages): memory dir per git repo, folder name = path with non-alphanumerics as `-`, frontmatter `type` under `metadata:`. Re-check them when Claude Code changes; SPEC.md § 1.1 holds the cited details
 - Destructive default actions must offer an opt-in confirmation flag (e.g. `/memorize dry`); `/recall` is read-only; `/tidy` always proposes first and offers `check` as a read-only mode
 - Public repo: skill text and examples must stay generic. No personal paths, employer or project names, people, hostnames or account identifiers
 
@@ -82,10 +83,10 @@ All docs in English. Code comments in English. The user's conversation language 
 
 - The path `~/.claude/system/memory/` may be a symlink pointing here; do not introduce hardcoded `/path/to/claude-memory` references in scripts — use `SCRIPT_DIR`-relative paths so the repo is portable to other clone locations
 - Skill directories at `~/.claude/skills/<name>/` must be symlinks resolving to the repo; never copy real files there (drift kills the SSOT property)
-- `/recall` must not hardcode the repo path or shell out to any helper script — grep over `~/.claude/projects/*/memory/` is the whole engine, keeping the skill self-contained and portable
+- `/recall` must not hardcode the repo path or shell out to any helper script — grep over the memory dirs (`<config dir>/projects/*/memory/`, `agent-memory/`, any `autoMemoryDirectory`) is the whole engine, keeping the skill self-contained and portable
 
 ## Relationship to Anthropic Memory Tool
 
-Anthropic released a Memory Tool (`memory_20250818`) on 2025-09-29 alongside Claude Sonnet 4.5. It operates at the API/SDK layer (per-tool-call memory operations). Claude Code's CLI auto-memory is a separate, older, prompt-based mechanism using `~/.claude/projects/<cwd>/memory/`.
+Anthropic released a Memory Tool (`memory_20250818`) on 2025-09-29 alongside Claude Sonnet 4.5. It operates at the API/SDK layer (per-tool-call memory operations). Claude Code's CLI auto-memory is a separate, older, prompt-based mechanism using `~/.claude/projects/<project>/memory/`.
 
 This repo enhances the **prompt-based mechanism** via two skills: `/recall` (read) and `/memorize` (write). When/if Claude Code integrates the official Memory Tool, the layers should coexist: this repo operates at the skill/invocation layer over the existing filesystem, the Memory Tool fires per tool call. See SPEC.md "Future" for migration notes.

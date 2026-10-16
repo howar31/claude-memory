@@ -6,7 +6,7 @@
     {
       "name": "mem",
       "source": "./",
-      "description": "Cross-cwd memory recall, write and upkeep skills (/mem:recall, /mem:memorize, /mem:tidy)"
+      "description": "Cross-project memory recall, write and upkeep skills (/mem:recall, /mem:memorize, /mem:tidy)"
     }
   ]
 }

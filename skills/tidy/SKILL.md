@@ -1,9 +1,9 @@
 ---
 name: tidy
-description: Use when a cwd's MEMORY.md index grows large or nears its auto-load limit (first 200 lines or 25KB), when Claude Code warns the memory index is near or over its read limit, when memory entries look stale, closed, duplicated or misplaced, when sessions are usually opened in a parent workspace folder holding several repos and repo-specific memories pile up there, or for periodic memory maintenance. Proactively offer it when MEMORY.md passes about 60% of either limit. Read-only health check — /tidy check. Trigger phrases — (zh) 「整理記憶」「記憶太大」「MEMORY.md 太長」「記憶瘦身」「清理記憶」「記憶搬到各專案」「檢查記憶」; (en) "tidy memory", "clean up memory", "memory index too big", "prune MEMORY.md", "reorganize memories", "move memories to the repo", "check memory health".
+description: Use when a project's MEMORY.md index grows large or nears its auto-load limit (first 200 lines or 25KB), when Claude Code warns the memory index is near or over its read limit, when memory entries look stale, closed, duplicated or misplaced, when sessions are usually opened in a parent workspace folder holding several repos and repo-specific memories pile up there, or for periodic memory maintenance. Proactively offer it when MEMORY.md passes about 60% of either limit. Read-only health check — /tidy check. Trigger phrases — (zh) 「整理記憶」「記憶太大」「MEMORY.md 太長」「記憶瘦身」「清理記憶」「記憶搬到各專案」「檢查記憶」; (en) "tidy memory", "clean up memory", "memory index too big", "prune MEMORY.md", "reorganize memories", "move memories to the repo", "check memory health".
 ---
 
-Keep the cwd's memory store loadable and well placed: the auto-loaded `MEMORY.md` stays under its limit, and each entry lives in the memory dir of the session that needs it. Nothing is deleted. An entry leaves the index only by being archived, grouped under a hub, or moved, and stays readable by `/recall`.
+Keep the project's memory store loadable and well placed: the auto-loaded `MEMORY.md` stays under its limit, and each entry lives in the memory dir of the session that needs it. Nothing is deleted. An entry leaves the index only by being archived, grouped under a hub, or moved, and stays readable by `/recall`.
 
 `$ARGUMENTS` parsing:
 - `check` → read-only: run Steps 1–2, report, change nothing.
@@ -13,9 +13,9 @@ Keep the cwd's memory store loadable and well placed: the auto-loaded `MEMORY.md
 
 ## Step 1 — Locate the dirs
 
-1. **Entry dir `E`** = the dir of the auto-loaded `MEMORY.md` (`<root>/<entry-folder>/memory/`). Projects root `R` = the parent of `<entry-folder>`.
-2. **Child dirs** = `R/<entry-folder>-*/memory/`. Claude Code keys memory by git repo root (or by cwd outside a repo) and encodes the path with `/` and `_` as `-`, so sessions opened in subfolders of the cwd land in folders sharing this prefix. The encoding is lossy; when a prefix match is ambiguous, confirm with the `cwd` field of that folder's newest transcript: `head -1 "$(ls -t R/<folder>/*.jsonl | head -1)" | jq -r .cwd`.
-3. **Repos without memory yet** = git repos directly under the cwd (`git -C <dir> rev-parse --show-toplevel` equals `<dir>`). Their memory folder is created on first move.
+1. **Entry dir `E`** = the dir of the auto-loaded `MEMORY.md`, as named in your system prompt (`<root>/<entry-folder>/memory/`). Projects root `R` = the parent of `<entry-folder>`. If `E` is not under `<config dir>/projects/` (an `autoMemoryDirectory` setting moved it), there are no child dirs: skip items 2 and 3 and the **move** action, and tidy `E` alone.
+2. **Child dirs** = `R/<entry-folder>-*/memory/`. Claude Code keeps one memory dir per git repository (its subdirectories and worktrees share it) and per launch directory outside a repo, and names the folder after that path with every non-alphanumeric character replaced by `-` (over 200 characters: truncated plus a hash suffix). So nested repos and non-repo subfolders of the entry project land in folders sharing this prefix. The encoding is lossy; when a prefix match is ambiguous, confirm with the first `cwd` value in that folder's newest transcript (absent once transcripts age out; then judge by name): `grep -m1 -o '"cwd":"[^"]*"' "$(ls -t R/<folder>/*.jsonl | head -1)" | cut -d'"' -f4`.
+3. **Repos without memory yet** = git repos directly under the entry project's directory (`git -C <dir> rev-parse --show-toplevel` equals `<dir>`). Their memory folder, created on first move, is `R/<encoded>/memory/` with `<encoded>` = `printf '%s' "<dir>" | sed 's/[^A-Za-z0-9]/-/g'`; a wrong name is never loaded, so compute it this way rather than by hand.
 
 ## Step 2 — Measure and check
 
@@ -56,7 +56,7 @@ Read each entry (frontmatter and body, especially status lines). Give each exact
 | group | 3+ entries of one kind of standing record (per-person access grants, per-vendor contacts, per-environment settings) | one hub entry lists them; the index keeps only the hub line; member files unchanged |
 | move | the entry is about one repo's code: source files, PRs, branches, repo conventions, a bug fixed by a code change | file goes to that repo's memory dir and its index |
 | fix | dangling link, unindexed file, or a fact the user has since corrected | repair the link (a bare filename that lives in another memory dir becomes `../../<folder>/memory/<file>`); index or archive the file; update the fact |
-| ask | status cannot be read from the file: a past deadline with no completion record, "pending" older than ~30 days | becomes a question in the proposal |
+| ask | status cannot be read from the file: a past deadline with no completion record, "pending" older than ~30 days (judge age by the `modified` frontmatter field when present: Claude Code sets it on each save) | becomes a question in the proposal |
 
 Placement test for **move**: would a session opened inside that repo need this entry to change the repo's code? Only a clear yes moves it. These stay in `E`:
 - Infrastructure and operations about a service (load balancer, CDN, IAM, deploy platform, incidents), even when it names one repo's service.
@@ -77,8 +77,8 @@ Then wait. Approval → Step 5. Edits → revise, reprint, wait again. Decline �
 ## Step 5 — Apply
 
 1. **Backup.** Copy `E` and every child dir that will change to `${TMPDIR:-/tmp}/memory-tidy-<YYYYmmdd-HHMMSS>/`.
-2. **Archive.** Insert `archived: YYYY-MM-DD` on the line after `type:`, same indentation.
-3. **Group.** Write the hub entry (same `type` as its members). Body: one line per member in index format, then `**Why:**` and `**How to apply:**`, stating that new records of this kind are added to the hub, not to `MEMORY.md`.
+2. **Archive.** Insert `archived: YYYY-MM-DD` on the line after `type:`, same indentation (under `metadata:` when `type` is nested there).
+3. **Group.** Write the hub entry in `/memorize`'s frontmatter layout (`metadata:` → `type:`), same `type` as its members. Body: one line per member in index format, then `**Why:**` and `**How to apply:**`, stating that new records of this kind are added to the hub, not to `MEMORY.md`.
 4. **Move.** Create the target `memory/` and its `MEMORY.md` if missing. Move the file, append its index line in the target, then rewrite markdown links:
    - in the moved file, links to entries that stayed → `../../<entry-folder>/memory/<file>`;
    - in entries that stayed, links to the moved file → `../../<child-folder>/memory/<file>`;
@@ -112,4 +112,4 @@ Before → after numbers, count per action, the backup path, and open questions.
 - Index line format matches `/memorize`: `- [Title](file.md) — hook`, about 150 characters at most.
 - Edit entry bodies only for: the `archived` field, link rewrites, and facts the user confirmed in this run.
 - Touch only `memory/` dirs; never transcripts.
-- To read memory across cwds, use `/recall`; to write new entries, use `/memorize`.
+- To read memory across projects, use `/recall`; to write new entries, use `/memorize`.

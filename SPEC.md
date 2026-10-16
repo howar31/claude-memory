@@ -2,17 +2,24 @@
 
 ## 1. Problem Statement
 
-Claude Code (the CLI) ships an auto-memory feature: if `autoMemoryEnabled: true` is set in `~/.claude/settings.json`, Claude is expected to write durable memory entries into `~/.claude/projects/<encoded-cwd>/memory/` over the course of conversations. The mechanism is prompt-driven — the model decides mid-conversation when content is "memorable enough" to save.
+Claude Code (the CLI) ships an auto-memory feature, on by default in local sessions (`autoMemoryEnabled: false` or `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` turns it off): Claude writes durable memory entries into `~/.claude/projects/<project>/memory/` over the course of conversations. The mechanism is prompt-driven — the model decides mid-conversation when content is "memorable enough" to save.
 
 This repo addresses two failure modes of that design:
 
-### 1.1 Per-cwd silos (read-time)
+### 1.1 Per-project silos (read-time)
 
-Memory is namespaced by cwd. Each working directory becomes its own folder under `~/.claude/projects/` (with the cwd path encoded into the folder name — e.g. `/path/to/project` becomes `-path-to-project`). A memory entry written while working in one cwd lives only in that cwd's memory folder and is **not visible** to a Claude Code session started in a sibling or parent cwd, even when the same person and the same broader project family are involved.
+Memory is namespaced by project. Per the memory docs (<https://code.claude.com/docs/en/memory>, "Storage location"): "The `<project>` path is derived from the git repository, so all worktrees and subdirectories within the same repo share one auto memory directory. Outside a git repo, the project root is used instead." The folder name is the path with every non-alphanumeric character replaced by `-` (e.g. `/path/to/project` becomes `-path-to-project`); names over 200 characters are truncated and get a hash of the full path (<https://code.claude.com/docs/en/sessions>, "Where transcripts are stored"). A memory entry written in one repo lives only in that repo's memory folder and is **not visible** to a session started in another repo, or in a non-repo parent folder that holds several repos, even when the same person and the same broader project family are involved.
 
-This becomes most painful when substantial work performed in a sub-project cwd is later referenced from the parent or a sibling cwd, because Claude only loads the current cwd's `MEMORY.md` at startup — even though the relevant entry exists, just one folder over.
+This becomes most painful when substantial work performed in one repo is later referenced from the parent workspace folder or a sibling repo, because Claude only loads the current project's `MEMORY.md` at startup — even though the relevant entry exists, just one folder over.
 
-The `/recall` skill closes this gap by searching every cwd's memory on demand and reading the relevant entries.
+The `/recall` skill closes this gap by searching every project's memory on demand and reading the relevant entries.
+
+Layout details the skills depend on (docs above plus the sub-agents page, verified against Claude Code 2.1.301):
+
+- **Path overrides.** `autoMemoryDirectory` (any settings scope) moves the current project's memory dir; `CLAUDE_CODE_PROJECT_DIR_NAME` beside `CLAUDE_CONFIG_DIR` fixes the folder name; `CLAUDE_CONFIG_DIR` replaces `~/.claude`. The harness's system prompt names the resolved memory dir even before `MEMORY.md` exists, so the skills take the path from there and only derive it as a fallback.
+- **Transcripts are keyed differently.** Transcripts live under the *working directory's* encoded path, not the repo's, so a session opened in a repo subdirectory writes its transcript to a folder that has no memory dir. Transcripts are deleted after `cleanupPeriodDays` (default 30) while memory files are exempt, and the JSONL format is internal. The first line of a transcript does not carry `cwd`; the skills take the first `cwd` value found anywhere in the file and fall back to the folder name.
+- **Subagent memory** (`memory: user|project|local` in an agent definition) lives in `~/.claude/agent-memory/<agent>/`, `.claude/agent-memory/<agent>/` or `.claude/agent-memory-local/<agent>/`, with the same 200-line / 25KB `MEMORY.md` limit. `/recall` searches it; `/memorize` and `/tidy` do not write there.
+- **Entry frontmatter.** Claude Code's own writes put `type` under `metadata:` and add a `modified` ISO timestamp on every save (v2.1.214+); older entries may have a top-level `type:`. The skills read both layouts and write the nested one.
 
 ### 1.2 Write-rate variance (write-time)
 
@@ -22,7 +29,7 @@ The `/memorize` skill closes this gap. It is a slash command (and model-invocabl
 
 ### 1.3 Index growth and misplacement (maintenance)
 
-Only the first 200 lines or 25KB of a cwd's `MEMORY.md` load at session start; the rest is dropped without notice (<https://code.claude.com/docs/en/memory>). Writes accumulate, closed items keep their index lines, and when sessions are usually opened in a parent folder that holds several repos, entries about one repo's code collect in the parent's memory, where a session opened inside that repo never sees them.
+Only the first 200 lines or 25KB of a project's `MEMORY.md` load at session start; the rest is dropped without notice (<https://code.claude.com/docs/en/memory>). Writes accumulate, closed items keep their index lines, and when sessions are usually opened in a parent folder that holds several repos, entries about one repo's code collect in the parent's memory, where a session opened inside that repo never sees them.
 
 The `/tidy` skill addresses this: it measures the index, repairs links, and moves each entry out of the index only by archiving, grouping or relocating it. No content is deleted.
 
@@ -84,16 +91,16 @@ The skill instruction file walks Claude through retrieval:
 
 1. **Parse `$ARGUMENTS`** — the search topic. If empty, infer the topic from the conversation; if still ambiguous, ask before searching.
 2. **Derive search terms** — memory files are written in English but the user often converses in Traditional Chinese, so translate the topic to likely English keywords and add synonyms, variants, and symbol forms (recall is conceptual, not exact-match).
-3. **Search** — case-insensitive recursive grep over every `~/.claude/projects/*/memory/` (both per-entry `*.md` and `MEMORY.md`); broaden on zero hits, narrow on too many.
+3. **Search** — case-insensitive recursive grep over every `<config dir>/projects/*/memory/` and `<config dir>/agent-memory/`, plus the current session's memory dir when an `autoMemoryDirectory` moved it, other `autoMemoryDirectory` values from settings, and the project's `.claude/agent-memory*/` dirs (both per-entry `*.md` and `MEMORY.md`); broaden on zero hits, narrow on too many.
 4. **Read** the matching entry files for full content.
-5. **Resolve project labels** only if precision is needed — the folder name is usually readable; otherwise read the latest `*.jsonl` transcript's `cwd` field (the folder-name encoding is lossy, so the transcript is authoritative).
-6. **Report** — lead with the conclusion, cite each memory's source project + filename; an empty recall is a valid result.
+5. **Resolve project labels** only if precision is needed — the folder name is usually readable; otherwise take the first `cwd` value in the newest `*.jsonl` transcript (the folder-name encoding is lossy); with no transcript left, cite the folder name.
+6. **Report** — lead with the conclusion, cite each memory's source project + filename and its `modified` date when present; an empty recall is a valid result.
 
 **Why this design:**
 
 - **Retrieve, don't inject** — grep returns only the matching subset, so the read path never places content into context that scales with total memory volume. This is the structural fix for the hook's 10,000-char cap (§ 3.2).
 - **grep is the whole engine** — no helper script. The skill is self-contained: `SKILL.md` *is* the implementation. This keeps it portable (no path-coupled dependency to install) and avoids reintroducing custom bash that can break across platforms (BSD vs GNU). The retired hook's only unique feature — resolving the lossy folder-name encoding to a real cwd — is folded into the skill as an optional one-liner applied to matched projects only, not all of them.
-- **Search includes the current cwd** — its `MEMORY.md` index is auto-loaded, but its individual entry bodies are not, so they are still worth grepping.
+- **Search includes the current project** — its `MEMORY.md` index is auto-loaded, but its individual entry bodies are not, so they are still worth grepping.
 
 ### 4.2 Write — `/memorize` skill
 
@@ -103,10 +110,10 @@ The skill instruction file walks Claude through retrieval:
 
 The skill instruction file walks Claude through a six-step audit:
 
-1. **Locate the memory directory** — derive `~/.claude/projects/<encoded-cwd>/memory/` from the auto-loaded `MEMORY.md`, or fall back to scanning project transcripts for a matching cwd. Create the directory and an empty `MEMORY.md` if absent.
+1. **Locate the memory directory** — use the path the system prompt names (it already reflects repo keying, worktrees and path overrides). If none is named, warn that auto memory may be off and ask before writing; the fallback derivation encodes the main worktree root (`git rev-parse --git-common-dir`), or the launch directory outside a repo. Create the directory and an empty `MEMORY.md` if absent.
 2. **Audit four categories** — `user`, `feedback`, `project`, `reference`. Decide YES / NO explicitly per category. Read existing entries to avoid duplicates and prefer updates over duplicates.
 3. **Preview (only in `dry` mode)** — print proposed entries and wait for the user's response in the same skill execution; loop on edits, abort on decline.
-4. **Write entries** — one `.md` file per memory under the memory dir, with `name` / `description` / `type` frontmatter. `feedback` and `project` types must include `Why:` and `How to apply:` body lines.
+4. **Write entries** — one `.md` file per memory under the memory dir, with `name` / `description` / `metadata.type` frontmatter (Claude Code's own layout; `modified` is left to Claude Code). `feedback` and `project` types must include `Why:` and `How to apply:` body lines.
 5. **Update `MEMORY.md` index** — append one pointer line per new entry, ≤ 150 chars.
 6. **Report** — list filenames written / updated; an empty audit is a valid result.
 
@@ -131,7 +138,7 @@ The `/recall` and `/memorize` descriptions are tuned for **high auto-invocation 
 **Skill:** `skills/tidy/SKILL.md`
 **Trigger:** user invocation (`/tidy`, `/tidy <focus>`, `/tidy check`) OR model self-invocation (index near its limit, Claude Code's near-limit warning, stale or misplaced entries)
 
-1. **Locate** the entry dir (the auto-loaded `MEMORY.md`), its child dirs (`<entry-folder>-*`, confirmed by transcript `cwd` when ambiguous) and git repos under the cwd that have no memory dir yet.
+1. **Locate** the entry dir (the auto-loaded `MEMORY.md`), its child dirs (`<entry-folder>-*`, confirmed by transcript `cwd` when ambiguous) and git repos under the entry project that have no memory dir yet; a new repo's folder name is computed with the documented encoding. When `autoMemoryDirectory` moved the entry dir out of `<config dir>/projects/`, only the entry dir is tidied and nothing moves.
 2. **Measure and check** each dir: line and byte count against the load limit, long index lines, dangling links, unindexed entries (not in the index, not under an indexed hub, not archived).
 3. **Classify** every entry as keep / shorten / archive / group / move / fix / ask.
 4. **Propose** the before-and-after size and per-action tables, then wait for approval. `check` mode stops after Step 2.
@@ -194,7 +201,7 @@ The installer runs a tool dependency check plus four phases, in order:
 
 ### 6.1 Tool dependency check
 
-Verifies `grep`, `jq`, and `bash` are on `PATH`. `grep` powers `/recall` search; `jq` resolves cwd labels at runtime and performs the legacy-settings migration. Aborts with remediation hint if any is missing.
+Verifies `grep`, `jq`, and `bash` are on `PATH`. `grep` powers `/recall` search; `jq` reads `autoMemoryDirectory` from settings at runtime and performs the legacy-settings migration. Aborts with remediation hint if any is missing.
 
 ### 6.2 Phase 0 — migrate legacy hook
 
@@ -258,7 +265,7 @@ Every skill in this repo follows this layout:
 - Use `$ARGUMENTS` for runtime input; document the parsing convention near the top
 - For destructive defaults (write/commit/delete), provide an explicit opt-in confirmation flag (e.g. `/memorize dry`); read-only skills (`/recall`) need none
 - No path-coupled helper scripts — a skill should be self-contained so it stays portable
-- No positional parameters (`$0`, `$1`, …) anywhere in a SKILL.md, shell snippets included: Claude Code substitutes them with the skill's arguments at load time (`/tidy check` turned `awk 'length($0)…'` into `length(check)`). Use named variables and `awk`'s bare `length`
+- No positional parameters (`$0`, `$1`, …) anywhere in a SKILL.md, shell snippets included: Claude Code substitutes them with the skill's arguments at load time (`/tidy check` turned `awk 'length($0)…'` into `length(check)`). Use named variables and `awk`'s bare `length`. The same applies to `${CLAUDE_...}`: Claude Code substitutes that form, so shell snippets write `$CLAUDE_CONFIG_DIR` without braces
 
 ## 8. Legacy Hook Migration & settings.json Discipline
 
@@ -285,13 +292,13 @@ This repo's skills are a **parallel implementation at a different layer**:
 
 | Layer | Native Claude Code | Anthropic Memory Tool | This repo |
 |---|---|---|---|
-| Where memory lives | `~/.claude/projects/<cwd>/memory/` | `/memories/` (client-defined) | Same as native |
-| Read trigger | Auto-load `MEMORY.md` at session start | Tool call when needed | `/recall` skill greps all cwds on demand |
+| Where memory lives | `~/.claude/projects/<project>/memory/` (per git repo) | `/memories/` (client-defined) | Same as native |
+| Read trigger | Auto-load `MEMORY.md` at session start | Tool call when needed | `/recall` skill greps all projects on demand |
 | Write trigger | Model self-judgment in conversation | Tool call when needed | `/memorize` skill (user or model invokes explicitly) |
 | Granularity | Per-turn (model decision) | Per-tool-call | Per-invocation (both read and write) |
 | Status in Claude Code CLI | Active | Not yet integrated (as of this writing) | Active |
 
-When Claude Code integrates the Memory Tool natively, this repo's `/recall` still adds value — the Memory Tool does not natively know about other cwds. The `/memorize` skill could likewise coexist or be retired depending on whether Memory Tool's per-tool-call writes prove sufficient. The standalone-skill paths ensure that adapting to such changes is a localised edit.
+When Claude Code integrates the Memory Tool natively, this repo's `/recall` still adds value — the Memory Tool does not natively know about other projects. The `/memorize` skill could likewise coexist or be retired depending on whether Memory Tool's per-tool-call writes prove sufficient. The standalone-skill paths ensure that adapting to such changes is a localised edit.
 
 ## 10. Decision Log
 
@@ -329,6 +336,12 @@ The skills gained a second distribution path: the `mem` Claude Code plugin, publ
 
 The cross-agent `npx skills` CLI would discover `skills/<name>/SKILL.md` in this repo, but all three skills operate on Claude Code's own memory store (`~/.claude/projects/*/memory/`, the auto-loaded `MEMORY.md` and its load limit). Installed into another agent they have nothing to act on, so distribution stays `setup.sh` + the `mem` plugin. Revisit only if another agent adopts the same memory layout.
 
+### 10.5 Align with the documented memory layout (2026-10-16)
+
+- **Trigger:** the docs and wording described memory as keyed by cwd; the memory docs key it by git repository (subdirectories and worktrees share one dir) and fall back to the project root outside a repo. Checking all three skills against the current docs and local data also found: the transcript-`cwd` lookup read line 1, which carries no `cwd`; `/memorize`'s fallback matched transcript `cwd` to the current directory, which picks a dir Claude Code never loads for a subdirectory or worktree session; `/tidy` documented only `/` and `_` in the folder-name encoding; `/memorize` wrote a top-level `type:` while Claude Code nests it under `metadata:`.
+- **Decision:** take the memory dir from the system prompt; derive it only as a fallback from the main worktree root with the documented encoding; read `cwd` from anywhere in the newest transcript and fall back to the folder name; write `metadata.type`; let `/recall` also search subagent memory and `autoMemoryDirectory` dirs and cite `modified` dates; let `/tidy` judge age by `modified` and skip moves when the entry dir is outside `<config dir>/projects/`.
+- **Cost accepted:** the skills now depend on more documented-but-changeable details (encoding, frontmatter layout, override settings); § 1.1 lists them with sources so a future check is one pass over the cited pages.
+
 ## 11. Future Extensions (Not Implemented)
 
 ### 11.1 Lesson Graduation
@@ -345,7 +358,7 @@ Defer until `Applied Learning` accumulates enough entries to justify the state-m
 
 A `UserPromptSubmit` hook that searches all `~/.claude/projects/*/memory/` for keyword matches with each user message, injecting relevant entries proactively (à la OpenClaw `active-memory`).
 
-Defer until `/recall` is observed to be insufficient in practice. If the model still misses cross-cwd recall when not explicitly cued, active prefetch closes the gap. Note the 10,000-char output cap applies to `UserPromptSubmit` too, so any such hook must inject only a small relevant slice (retrieve-don't-inject), never an enumeration.
+Defer until `/recall` is observed to be insufficient in practice. If the model still misses cross-project recall when not explicitly cued, active prefetch closes the gap. Note the 10,000-char output cap applies to `UserPromptSubmit` too, so any such hook must inject only a small relevant slice (retrieve-don't-inject), never an enumeration.
 
 ### 11.3 Promotion sweep
 
@@ -357,7 +370,10 @@ Defer until daily logs exist; the user does not currently maintain `memory/YYYY-
 
 ### Anthropic primary sources
 - [Claude Code hooks documentation](https://code.claude.com/docs/en/hooks) — establishes the 10,000-char hook output cap (§ 3.2, § 10)
-- [Claude Code skills documentation](https://code.claude.com/docs/en/skills) — skill description budget, `maxSkillDescriptionChars`, overflow behaviour (§ 7)
+- [Claude Code skills documentation](https://code.claude.com/docs/en/skills) — skill description budget, `maxSkillDescriptionChars`, overflow behaviour, argument and `${CLAUDE_*}` substitution (§ 7)
+- [Claude Code memory documentation](https://code.claude.com/docs/en/memory) — memory dir per git repo, load limits, `autoMemoryDirectory`, `modified` field (§ 1)
+- [Claude Code sessions documentation](https://code.claude.com/docs/en/sessions) — project folder-name encoding, transcript location and retention, `CLAUDE_CODE_PROJECT_DIR_NAME` (§ 1.1)
+- [Claude Code sub-agents documentation](https://code.claude.com/docs/en/sub-agents) — subagent `memory` scopes and paths (§ 1.1)
 - [Memory tool documentation](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool)
 - [Context management announcement (2025-09-29)](https://claude.com/blog/context-management)
 - [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)

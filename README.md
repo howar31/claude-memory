@@ -11,18 +11,18 @@
 
 English | [正體中文](README.zh-Hant.md)
 
-Three skills for [Claude Code](https://claude.com/claude-code)'s built-in auto-memory: a **read** skill that recalls memory across project directories, a **write** skill that audits the conversation on demand, and a **maintenance** skill that keeps each directory's memory index under its load limit. They work directly on the existing `~/.claude/projects/<encoded-cwd>/memory/` files. No vector database, no MCP server, no external service.
+Three skills for [Claude Code](https://claude.com/claude-code)'s built-in auto-memory: a **read** skill that recalls memory across projects, a **write** skill that audits the conversation on demand, and a **maintenance** skill that keeps each project's memory index under its load limit. They work directly on the existing `~/.claude/projects/<project>/memory/` files. No vector database, no MCP server, no external service.
 
 ## What you get
 
 ### Read: `/recall` skill
 
-Claude Code's auto-memory is namespaced per cwd. A memory written while working in one project directory lives in that cwd's memory folder and is not visible from a sibling or parent cwd, even when the topic is the same. Claude Code auto-loads only the **current** cwd's `MEMORY.md` at startup.
+Claude Code's auto-memory is kept per project: one memory folder per git repository, shared by all of its subdirectories and worktrees, and one per project directory outside a repo. A memory written in one repo is not visible from another repo, or from a parent folder that holds several repos, even when the topic is the same. Claude Code auto-loads only the **current** project's `MEMORY.md` at startup.
 
-`/recall` covers that gap on demand: it greps every `~/.claude/projects/*/memory/` for the topic, reads the relevant entries, and answers from them, citing which project each came from.
+`/recall` covers that gap on demand: it greps every `~/.claude/projects/*/memory/` (plus subagent memory and any `autoMemoryDirectory` it finds in your settings) for the topic, reads the relevant entries, and answers from them, citing which project each came from.
 
 ```text
-/recall <topic>     → search all cwds' memory for the topic and report
+/recall <topic>     → search all projects' memory for the topic and report
 /recall             → infer the topic from the conversation (or ask if unclear)
 ```
 
@@ -45,7 +45,7 @@ The skill is also model-invocable, and its description asks the model to run it 
 
 ### Maintain: `/tidy` skill
 
-Claude Code loads only the first 200 lines or 25KB of a directory's `MEMORY.md` at session start; anything past that is dropped without notice. Memory also piles up in one place when sessions are usually opened in a parent folder that holds several repos, while a session opened inside one of those repos never sees it.
+Claude Code loads only the first 200 lines or 25KB of a project's `MEMORY.md` at session start; anything past that is dropped without notice. Memory also piles up in one place when sessions are usually opened in a parent folder that holds several repos, while a session opened inside one of those repos never sees it.
 
 `/tidy` measures the index, checks for broken links and unindexed entries, and proposes one action per entry:
 
@@ -160,11 +160,11 @@ The skills are not offered through `npx skills`: all three work on Claude Code's
 
 ## What you'll see
 
-When you reference past work in another project ("did we solve X in the other repo?", "find my preference for Y"), Claude invokes `/recall`, greps every cwd's memory, and answers from the matching entries, naming the source project. You can also call `/recall <topic>` explicitly.
+When you reference past work in another project ("did we solve X in the other repo?", "find my preference for Y"), Claude invokes `/recall`, greps every project's memory, and answers from the matching entries, naming the source project. You can also call `/recall <topic>` explicitly.
 
-Whenever you (or Claude) want to keep session content for the future, run `/memorize` (or `/memorize dry` to review the proposal first). Entries are written under the current cwd's `~/.claude/projects/<encoded-cwd>/memory/`, where the current session's auto-load and future `/recall` searches both pick them up.
+Whenever you (or Claude) want to keep session content for the future, run `/memorize` (or `/memorize dry` to review the proposal first). Entries are written to the memory folder Claude Code uses for the current project (by default `~/.claude/projects/<project>/memory/`, where `<project>` is the repository's path with non-alphanumeric characters replaced by `-`), where the current session's auto-load and future `/recall` searches both pick them up.
 
-When a directory's `MEMORY.md` grows past about 60% of its load limit, or Claude Code warns that it is near the limit, run `/tidy` (or `/tidy check` for a read-only report).
+When a project's `MEMORY.md` grows past about 60% of its load limit, or Claude Code warns that it is near the limit, run `/tidy` (or `/tidy check` for a read-only report).
 
 ## Backup
 

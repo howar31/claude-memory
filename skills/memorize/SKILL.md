@@ -1,6 +1,6 @@
 ---
 name: memorize
-description: Audit the current conversation and persist memory-worthy content (user preferences, feedback, project state, references) to the cwd's memory directory. Proactively self-invoke — do not wait to be asked: run the audit whenever a turn plausibly produced something that should outlive the session, then let the audit decide whether to actually write (an empty audit is a valid, cheap outcome). Concretely invoke when the user corrects or redirects your approach; validates a non-obvious choice; states a preference, habit, or constraint; reveals role/domain context; when a project decision, deadline, or status changes; when an external doc/dashboard/tool is cited as authoritative; or when you finish a non-trivial task or are about to wrap up a long session. Trigger phrases — (zh) 「記住」「記一下」「以後都這樣」「不要再…」「對,就是這樣」「這個之後會用到」; (en) "remember this", "note that", "from now on", "do not do X again", "yes exactly", "keep that", "save this". Writing is safe: Step 2 dedups against existing entries (update over create), so frequent auditing improves recall quality without cluttering the store. Use /memorize dry to preview before writing.
+description: Audit the current conversation and persist memory-worthy content (user preferences, feedback, project state, references) to the current project's auto-memory directory. Proactively self-invoke — do not wait to be asked: run the audit whenever a turn plausibly produced something that should outlive the session, then let the audit decide whether to actually write (an empty audit is a valid, cheap outcome). Concretely invoke when the user corrects or redirects your approach; validates a non-obvious choice; states a preference, habit, or constraint; reveals role/domain context; when a project decision, deadline, or status changes; when an external doc/dashboard/tool is cited as authoritative; or when you finish a non-trivial task or are about to wrap up a long session. Trigger phrases — (zh) 「記住」「記一下」「以後都這樣」「不要再…」「對,就是這樣」「這個之後會用到」; (en) "remember this", "note that", "from now on", "do not do X again", "yes exactly", "keep that", "save this". Writing is safe: Step 2 dedups against existing entries (update over create), so frequent auditing improves recall quality without cluttering the store. Use /memorize dry to preview before writing.
 ---
 
 Audit the current conversation against the four memory categories (user / feedback / project / reference) enumerated in Step 2 below, and persist entries that should survive past this session.
@@ -19,9 +19,24 @@ Examples:
 
 ## Step 1 — Locate the memory directory
 
-The cwd's memory directory is the parent of the auto-loaded `MEMORY.md` already in your context (path matches `~/.claude/projects/<encoded-cwd>/memory/`). Use that exact path.
+Use the auto-memory directory path that your system prompt names; it is also the parent of the auto-loaded `MEMORY.md`. Claude Code names it even before `MEMORY.md` exists, and it already reflects how Claude Code picks the dir: one per git repository (subdirectories and worktrees share it), the launch directory outside a repo, an `autoMemoryDirectory` setting, or `CLAUDE_CODE_PROJECT_DIR_NAME`. Use that exact path.
 
-If `MEMORY.md` is not in context, derive the encoded cwd by checking `~/.claude/projects/*/` for a directory whose latest `*.jsonl` transcript first record has a `cwd` field matching the current cwd. Create the `memory/` subdirectory and an empty `MEMORY.md` (no frontmatter) if absent.
+If no path is named, auto memory may be off (`autoMemoryEnabled: false` or `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`); Claude Code then loads nothing from the dir, so tell the user and ask before writing. To derive the default path:
+
+```bash
+base="$HOME/.claude"; [ -n "$CLAUDE_CONFIG_DIR" ] && base="$CLAUDE_CONFIG_DIR"
+common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+case "$common" in
+  "") root="$PWD" ;;                                  # not a repo: run from the launch directory
+  */.git) root="${common%/.git}" ;;                   # main worktree, shared by all worktrees
+  *) root="$(git rev-parse --show-toplevel)" ;;
+esac
+printf '%s/projects/%s/memory\n' "$base" "$(printf '%s' "$root" | sed 's/[^A-Za-z0-9]/-/g')"
+```
+
+An encoded name over 200 characters is truncated by Claude Code and given a hash suffix; in that case pick the existing folder under `$base/projects/` that starts with the first 200 characters.
+
+Create the `memory/` subdirectory and an empty `MEMORY.md` (no frontmatter) if absent.
 
 ## Step 2 — Audit four categories
 
@@ -53,13 +68,16 @@ Each entry is one `.md` file under the memory dir using this format:
 
 ```markdown
 ---
-name: {{title}}
+name: {{short-kebab-case-slug}}
 description: {{one-line description used to decide relevance in future conversations — be specific}}
-type: {{user | feedback | project | reference}}
+metadata:
+  type: {{user | feedback | project | reference}}
 ---
 
 {{content body}}
 ```
+
+This is the layout Claude Code's own memory writes use. Do not write a `modified` field: Claude Code records the write time there on each save. When updating an existing entry, keep its layout (some older entries have a top-level `type:`) and any fields it already has.
 
 For `feedback` and `project` types, the body must include:
 - A `**Why:**` line — the reason behind the rule/fact (often a past incident or constraint)
@@ -91,4 +109,4 @@ Print a short summary: filenames written, filenames updated, and confirmation th
 - Do **not** save: ephemeral task state, rediscoverable code patterns, content already in CLAUDE.md, or this conversation's summary text.
 - If unsure whether something is worth saving, lean toward saving — an extra entry beats a lost one.
 - Default behaviour is to write directly. Use `dry` mode for explicit preview-first; or honour an in-conversation override like "先給我看" without requiring the flag.
-- This skill writes memory. To search/recall existing memory across all project cwds (read), use `/recall`.
+- This skill writes memory. To search/recall existing memory across all projects (read), use `/recall`.
