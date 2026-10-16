@@ -24,17 +24,23 @@ Run in `E` and in every child dir; keep a copy of each `MEMORY.md` as read now (
 ```bash
 cd "<memory dir>"
 printf 'MEMORY.md: %s lines, %s bytes\n' "$(wc -l < MEMORY.md)" "$(wc -c < MEMORY.md)"
-awk 'length($0) > 150 { print "long line " NR ": " length($0) }' MEMORY.md
-links() { grep -o '](\([^)#]*\.md\))' "$1" | sed 's/^](//; s/)$//'; }
-for f in *.md; do links "$f" | while read -r l; do [ -f "$l" ] || echo "dangling in $f: $l"; done; done
+awk 'length > 150 { print "long line " NR ": " length }' MEMORY.md
+for f in *.md; do
+  grep -o '](\([^)#]*\.md\))' "$f" | sed 's/^](//; s/)$//' | while read -r l; do
+    [ -f "$l" ] || echo "dangling in $f: $l"
+  done
+done
 for f in *.md; do
   [ "$f" = MEMORY.md ] && continue
   grep -qF "($f)" MEMORY.md && continue
   grep -q '^[[:space:]]*archived:' "$f" && continue
-  hub=0; for h in $(links MEMORY.md); do [ -f "$h" ] && grep -qF "($f)" "$h" && hub=1; done
-  [ "$hub" = 1 ] || echo "unindexed: $f"
+  grep -o '](\([^)#]*\.md\))' MEMORY.md | sed 's/^](//; s/)$//' | while read -r h; do
+    [ -f "$h" ] && grep -qF "($f)" "$h" && echo hub
+  done | grep -q hub || echo "unindexed: $f"
 done
 ```
+
+The snippet runs the same in bash and zsh. `awk` may count bytes rather than characters, so CJK text and `—` read longer; treat the count as approximate.
 
 Limits (Claude Code docs, memory page): the first 200 lines or 25KB of `MEMORY.md`, whichever comes first, load at session start; the rest is dropped silently. Entry files load on demand and do not count.
 
@@ -49,7 +55,7 @@ Read each entry (frontmatter and body, especially status lines). Give each exact
 | archive | project closed (done, resolved, decided and applied), nothing pending, no future date | drop the index line; add `archived: YYYY-MM-DD` to the frontmatter; file stays |
 | group | 3+ entries of one kind of standing record (per-person access grants, per-vendor contacts, per-environment settings) | one hub entry lists them; the index keeps only the hub line; member files unchanged |
 | move | the entry is about one repo's code: source files, PRs, branches, repo conventions, a bug fixed by a code change | file goes to that repo's memory dir and its index |
-| fix | dangling link, unindexed file, or a fact the user has since corrected | repair the link; index or archive the file; update the fact |
+| fix | dangling link, unindexed file, or a fact the user has since corrected | repair the link (a bare filename that lives in another memory dir becomes `../../<folder>/memory/<file>`); index or archive the file; update the fact |
 | ask | status cannot be read from the file: a past deadline with no completion record, "pending" older than ~30 days | becomes a question in the proposal |
 
 Placement test for **move**: would a session opened inside that repo need this entry to change the repo's code? Only a clear yes moves it. These stay in `E`:

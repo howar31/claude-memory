@@ -47,13 +47,14 @@ All skills (`skills/<name>/SKILL.md`):
 - Descriptions are deliberately tuned for **high auto-invocation frequency** (proactive self-invoke language + many trigger phrases), relying on `/memorize`'s internal dedup rather than trigger restraint to keep the store clean — i.e. decouple invocation frequency from write frequency. Do not trim them back toward terse triggering; both stay well under the 1,536-char cap. See SPEC.md § 4.2
 - Body is numbered steps, English, terse
 - `$ARGUMENTS` parsing documented near the top
+- No positional parameters (`$0`, `$1`, …) anywhere in a SKILL.md, including shell snippets: Claude Code substitutes them with the skill's arguments when it loads the skill, so `awk '{print $0}'` or a shell function's `"$1"` silently change meaning. Use named variables and `awk`'s bare `length`
 - Destructive default actions must offer an opt-in confirmation flag (e.g. `/memorize dry`); `/recall` is read-only; `/tidy` always proposes first and offers `check` as a read-only mode
 - Public repo: skill text and examples must stay generic. No personal paths, employer or project names, people, hostnames or account identifiers
 
 ## Doc Set
 
 Three documents per the user's `/commit` skill convention:
-- `README.md` — human-readable: project intro, quick start, install / uninstall
+- `README.md` — human-readable: project intro, quick start, install / uninstall. `README.zh-Hant.md` is its Traditional Chinese (正體中文) counterpart with the same sections; each links the other in a switcher line under the badges. Change both together
 - `CLAUDE.md` (this file) — AI agent index, ≤ 200 lines, mostly pointers
 - `SPEC.md` — AI-readable architecture, decision log, skill contracts, references
 

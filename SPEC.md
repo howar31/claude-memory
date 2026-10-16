@@ -161,7 +161,8 @@ claude-memory/
 │   ├── plugin.json                      plugin manifest (name: mem)
 │   └── marketplace.json                 self-hosted single-plugin marketplace (source: "./")
 ├── LICENSE                              MIT
-├── README.md                            human-facing intro & install
+├── README.md                            human-facing intro & install (English)
+├── README.zh-Hant.md                    same content in Traditional Chinese
 ├── CLAUDE.md                            agent index for working in this repo
 ├── SPEC.md                              this document
 ├── setup.sh                             idempotent installer + verifier
@@ -257,6 +258,7 @@ Every skill in this repo follows this layout:
 - Use `$ARGUMENTS` for runtime input; document the parsing convention near the top
 - For destructive defaults (write/commit/delete), provide an explicit opt-in confirmation flag (e.g. `/memorize dry`); read-only skills (`/recall`) need none
 - No path-coupled helper scripts — a skill should be self-contained so it stays portable
+- No positional parameters (`$0`, `$1`, …) anywhere in a SKILL.md, shell snippets included: Claude Code substitutes them with the skill's arguments at load time (`/tidy check` turned `awk 'length($0)…'` into `length(check)`). Use named variables and `awk`'s bare `length`
 
 ## 8. Legacy Hook Migration & settings.json Discipline
 

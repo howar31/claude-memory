@@ -9,28 +9,30 @@
 [![Open Issues](https://img.shields.io/github/issues/howar31/claude-memory?style=flat-square)](https://github.com/howar31/claude-memory/issues)
 [![Sponsor](https://img.shields.io/badge/Sponsor-donate.howar31.com-b4532c?style=flat-square&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iI2ZmZiIgZD0iTTIwLjg0IDQuNjFhNS41IDUuNSAwIDAgMC03Ljc4IDBMMTIgNS42N2wtMS4wNi0xLjA2YTUuNSA1LjUgMCAwIDAtNy43OCA3Ljc4bDEuMDYgMS4wNkwxMiAyMS4yM2w3Ljc4LTcuNzggMS4wNi0xLjA2YTUuNSA1LjUgMCAwIDAgMC03Ljc4eiIvPjwvc3ZnPg==)](https://donate.howar31.com/)
 
-Three skills that close reliability gaps in [Claude Code](https://claude.com/claude-code)'s built-in auto-memory: a **read** skill that recalls memory across project directories, a **write** skill that audits the conversation on demand, and a **maintenance** skill that keeps each directory's memory index under its load limit. Pure read/write on top of the existing `~/.claude/projects/<encoded-cwd>/memory/` filesystem. No vector database, no MCP server, no external service.
+English | [正體中文](README.zh-Hant.md)
+
+Three skills for [Claude Code](https://claude.com/claude-code)'s built-in auto-memory: a **read** skill that recalls memory across project directories, a **write** skill that audits the conversation on demand, and a **maintenance** skill that keeps each directory's memory index under its load limit. They work directly on the existing `~/.claude/projects/<encoded-cwd>/memory/` files. No vector database, no MCP server, no external service.
 
 ## What you get
 
 ### Read: `/recall` skill
 
-Claude Code's auto-memory is namespaced per cwd. A memory written while working in one project directory lives in that cwd's memory folder and is invisible from a sibling or parent cwd, even when the topic is the same. Claude Code auto-loads only the **current** cwd's `MEMORY.md` at startup.
+Claude Code's auto-memory is namespaced per cwd. A memory written while working in one project directory lives in that cwd's memory folder and is not visible from a sibling or parent cwd, even when the topic is the same. Claude Code auto-loads only the **current** cwd's `MEMORY.md` at startup.
 
-`/recall` closes that gap on demand: it greps every `~/.claude/projects/*/memory/` for the topic, reads the relevant entries, and answers from them — citing which project each came from.
+`/recall` covers that gap on demand: it greps every `~/.claude/projects/*/memory/` for the topic, reads the relevant entries, and answers from them, citing which project each came from.
 
 ```text
 /recall <topic>     → search all cwds' memory for the topic and report
 /recall             → infer the topic from the conversation (or ask if unclear)
 ```
 
-Because recall happens **at query time** (grep returns only the matching slice) rather than by injecting a full index at startup, it scales without limit as your memory grows. The skill is model-invocable and tuned to self-trigger eagerly — not only when you reference past work in another project or ask what it remembers, but proactively at the start of a task that resembles earlier work. It is read-only and cheap, so it errs toward recalling.
+Recall happens **at query time** (grep returns only the matching slice) instead of injecting a full index at startup, so its context cost does not grow with the size of your memory. The skill is model-invocable and its description asks the model to call it often: when you reference past work in another project, when you ask what it remembers, and at the start of a task that resembles earlier work. It is read-only.
 
 ### Write: `/memorize` skill
 
-Claude Code's auto-memory writes are prompt-driven: the model decides during a turn whether content is worth saving, and sometimes does not notice. The `/memorize` skill is the explicit lever — it audits the current session against four memory categories (`user`, `feedback`, `project`, `reference`) and persists entries directly.
+Claude Code's auto-memory writes are prompt-driven: the model decides during a turn whether content is worth saving, and sometimes does not notice. `/memorize` is the explicit lever: it audits the current session against four memory categories (`user`, `feedback`, `project`, `reference`) and persists entries.
 
-Default behaviour writes directly. Pass `dry` to preview first and confirm before writing:
+By default it writes directly. Pass `dry` to preview first and confirm before writing:
 
 ```text
 /memorize                          → audit and write directly
@@ -39,11 +41,11 @@ Default behaviour writes directly. Pass `dry` to preview first and confirm befor
 /memorize dry <focus hint>         → preview with focused audit
 ```
 
-The skill is also model-invocable and tuned to self-trigger eagerly whenever a turn plausibly produced something worth keeping (corrections, validated choices, new domain context, project state changes). It audits often by design — its dedup step means frequent auditing improves recall without cluttering the store, and an empty audit is a valid outcome.
+The skill is also model-invocable, and its description asks the model to run it whenever a turn may have produced something worth keeping (corrections, confirmed choices, new domain context, project state changes). It reads existing entries first and updates them instead of adding duplicates, and an empty audit is a valid outcome.
 
 ### Maintain: `/tidy` skill
 
-Claude Code loads only the first 200 lines or 25KB of a directory's `MEMORY.md` at session start; anything past that is dropped without notice. Memory also tends to pile up in one place when sessions are usually opened in a parent folder that holds several repos, while a session opened inside one of those repos never sees it.
+Claude Code loads only the first 200 lines or 25KB of a directory's `MEMORY.md` at session start; anything past that is dropped without notice. Memory also piles up in one place when sessions are usually opened in a parent folder that holds several repos, while a session opened inside one of those repos never sees it.
 
 `/tidy` measures the index, checks for broken links and unindexed entries, and proposes one action per entry:
 
@@ -60,7 +62,7 @@ Nothing changes until you approve the proposal. Files are never deleted, and the
 /tidy check         → read-only health report
 ```
 
-All three skills complement (not replace) the built-in auto-memory. See [SPEC.md](SPEC.md) for the full design rationale, why the earlier SessionStart hook was retired, alternatives considered (mem-palace, Obsidian, OpenClaw, muse-crystal-seed, Letta, Mem0, Zep), and the relationship to Anthropic's official Memory Tool (released 2025-09-29 for the API).
+All three skills complement the built-in auto-memory; they do not replace it. See [SPEC.md](SPEC.md) for the design rationale, why the earlier SessionStart hook was retired, alternatives considered (mem-palace, Obsidian, OpenClaw, muse-crystal-seed, Letta, Mem0, Zep), and the relationship to Anthropic's Memory Tool (released 2025-09-29 for the API).
 
 ## Architecture
 
@@ -84,24 +86,22 @@ Files installed:
 ~/.claude/system/memory       symlink → repo    (operational pointer)
 ```
 
-No hook is installed and `settings.json` is not modified. (If you installed an
-older hook-based version, `setup.sh` removes the legacy hook and its
-`settings.json` entry automatically — see *Quick Start*.)
+No hook is installed and `settings.json` is not modified. If you installed an older hook-based version, `setup.sh` removes the legacy hook and its `settings.json` entry (see *Quick Start*).
 
 ## Quick Start
 
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/howar31/claude-memory /path/to/claude-memory
+git clone https://github.com/howar31/claude-memory
 ```
 
-(The path is up to you. The installer reads `$BASH_SOURCE` and works from anywhere.)
+The location is up to you; the installer resolves its own path and works from anywhere.
 
 ### 2. Install
 
 ```bash
-cd /path/to/claude-memory && ./setup.sh
+cd claude-memory && ./setup.sh
 ```
 
 The installer is idempotent and safe to re-run. It will:
@@ -111,12 +111,12 @@ The installer is idempotent and safe to re-run. It will:
 - Create `~/.claude/system/memory` → repo
 - Run a verification phase that confirms the skill symlinks, their `SKILL.md` frontmatter, and that no legacy hook remains
 
-If anything is unsafe to do automatically (an existing real directory at a skill path), the installer stops with a clear remediation message and a backup already in place.
+If a step is unsafe to do automatically (an existing real directory at a skill path), the installer stops with a remediation message, with a backup already in place.
 
 ### 3. Verify
 
 ```bash
-./setup.sh           # re-run anytime — it will report all-green or pinpoint what's wrong
+./setup.sh           # re-run any time; reports all checks or what is wrong
 ./setup.sh --dry-run # preview without applying
 ./setup.sh --force   # replace mismatched directories at ~/.claude/skills/
 ```
@@ -127,9 +127,9 @@ Skills are picked up dynamically; run `/reload-plugins` in an active session if 
 
 ## Install as a plugin (alternative)
 
-If you prefer Claude Code's plugin manager over the symlink installer, the same skills are also published as the `mem` plugin. Plugin-managed skills are **namespaced**, so they appear as `/mem:recall`, `/mem:memorize` and `/mem:tidy` (the `setup.sh` method above keeps the shorter `/recall`, `/memorize` and `/tidy`; see the trade-off below).
+If you prefer Claude Code's plugin manager over the symlink installer, the same skills are also published as the `mem` plugin. Plugin-managed skills are **namespaced**, so they appear as `/mem:recall`, `/mem:memorize` and `/mem:tidy` (the `setup.sh` method above keeps the shorter `/recall`, `/memorize` and `/tidy`; see the comparison below).
 
-Two registration paths install the same plugin — pick one:
+Two registration paths install the same plugin; pick one.
 
 **Self-hosted marketplace** (this repo is its own marketplace):
 
@@ -154,21 +154,23 @@ claude plugin install mem@howar31
 | Discoverable | no | yes (via marketplace) |
 | Non-Claude harnesses | works (plain skill dirs) | depends on the harness's plugin support |
 
-Install one method or the other, not both — they would expose the same skills under two names.
+Install one method, not both; both together expose the same skills under two names.
+
+The skills are not offered through `npx skills`: all three work on Claude Code's own memory folders, so another agent has nothing for them to act on.
 
 ## What you'll see
 
-When you reference past work in another project ("did we solve X in the other repo?", "find my preference for Y"), Claude invokes `/recall`, greps every cwd's memory, and answers from the matching entries — naming the source project. You can also call `/recall <topic>` explicitly.
+When you reference past work in another project ("did we solve X in the other repo?", "find my preference for Y"), Claude invokes `/recall`, greps every cwd's memory, and answers from the matching entries, naming the source project. You can also call `/recall <topic>` explicitly.
 
-Whenever you (or Claude) want to capture session content for the future, run `/memorize` (or `/memorize dry` to review the proposal first). Entries are written under the current cwd's `~/.claude/projects/<encoded-cwd>/memory/`, where the current session's auto-load and future `/recall` searches both pick them up.
+Whenever you (or Claude) want to keep session content for the future, run `/memorize` (or `/memorize dry` to review the proposal first). Entries are written under the current cwd's `~/.claude/projects/<encoded-cwd>/memory/`, where the current session's auto-load and future `/recall` searches both pick them up.
 
 When a directory's `MEMORY.md` grows past about 60% of its load limit, or Claude Code warns that it is near the limit, run `/tidy` (or `/tidy check` for a read-only report).
 
-## Backup story
+## Backup
 
-The repo lives at `/path/to/claude-memory` and is symlinked into `~/.claude/system/memory`. The skill directories in `~/.claude/skills/` are themselves symlinks back into the repo, so the repo is the single source of truth and is naturally captured by any backup that includes `/path/to/`.
+The skill directories in `~/.claude/skills/` and `~/.claude/system/memory` are symlinks back into the repo, so the repo is the single source of truth and any backup that includes the clone covers it.
 
-If you also use [`claude-backup`](https://github.com/howar31/claude-backup) for the `~/.claude/` tree, both this repo's path and the symlinks are covered.
+If you also use [`claude-backup`](https://github.com/howar31/claude-backup) for the `~/.claude/` tree, the symlinks are covered there as well.
 
 ## Uninstall
 
@@ -186,12 +188,12 @@ If you installed the plugin instead:
 claude plugin uninstall mem@claude-memory   # or mem@howar31
 ```
 
-There is nothing to undo in `settings.json` — the current version never writes to it.
+There is nothing to undo in `settings.json`; the current version never writes to it.
 
 ## Reference
 
-- [SPEC.md](SPEC.md) — full architecture, design decisions, alternatives considered, skill contracts, future extensions
-- [CLAUDE.md](CLAUDE.md) — agent index for working in this repo
+- [SPEC.md](SPEC.md): architecture, design decisions, alternatives considered, skill contracts, future extensions
+- [CLAUDE.md](CLAUDE.md): agent index for working in this repo
 
 ## License
 
